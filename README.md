@@ -65,6 +65,9 @@ hf download <user>/<dataset> --repo-type dataset --local-dir ~/.local/share/agen
 agent-usage dashboard
 ```
 
+`push` refuses to upload to a dataset that is public (a new one is created private);
+pass `--allow-public` to override.
+
 ## Development
 
 ```sh

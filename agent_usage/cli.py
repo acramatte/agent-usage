@@ -63,6 +63,9 @@ def push(args):
         raise SystemExit(f"nothing to push for {args.machine} in {args.data_dir}")
     api = HfApi()
     api.create_repo(args.repo, repo_type="dataset", private=True, exist_ok=True)
+    # private=True only applies when the dataset is new; an existing one keeps its visibility.
+    if not api.repo_info(args.repo, repo_type="dataset").private and not args.allow_public:
+        raise SystemExit(f"{args.repo} is public; refusing to push (pass --allow-public to override)")
     for p in paths:
         api.upload_file(path_or_fileobj=p, path_in_repo=p.name, repo_id=args.repo,
                         repo_type="dataset", commit_message=f"agent-usage: {p.name}")
@@ -92,6 +95,8 @@ def main(argv=None):
     p = sub.add_parser("push", parents=[common, machine],
                        help="upload this machine's parquet to a Hugging Face dataset")
     p.add_argument("--repo", default=os.environ.get("AGENT_USAGE_HF_REPO"))
+    p.add_argument("--allow-public", action="store_true",
+                   help="push even if the dataset already exists and is public")
     p.set_defaults(fn=push)
     args = ap.parse_args(argv)
     args.fn(args)
