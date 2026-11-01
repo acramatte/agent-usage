@@ -4,7 +4,7 @@ Skills, tool calls and model usage across local coding agents, in one table and 
 
 ```sh
 uv tool install git+https://github.com/acramatte/agent-usage   # or: uv tool install .
-agent-usage agents      # which agents are on this machine, session files, adapter yes/no
+agent-usage agents      # which agents are on this machine, session files, ingested yes/no
 agent-usage ingest      # transcripts -> events-<machine>.parquet (+ skills-<machine>.json)
 agent-usage dashboard   # -> dashboard.html (self-contained) and open it
 agent-usage push --repo <user>/<dataset>   # optional, needs 'agent-usage[push]'

@@ -24,15 +24,15 @@ def agents(args):
         keep = ADAPTERS[e["id"]][1] if e["id"] in ADAPTERS else (lambda p: True)
         n = len(registry.files_for(e["id"], keep))
         rows.append(dict(id=e["id"], name=e["display_name"], found=n > 0, files=n,
-                         adapter=e["id"] in ADAPTERS))
-    rows.sort(key=lambda r: (not r["found"], not r["adapter"], r["id"]))
+                         ingest=e["id"] in ADAPTERS))
+    rows.sort(key=lambda r: (not r["found"], not r["ingest"], r["id"]))
     if args.json:
         print(json.dumps(rows, indent=2))
         return
-    print(f"{'id':14} {'agent':24} {'found':5} {'files':>6}  adapter")
+    print(f"{'id':14} {'agent':24} {'found':5} {'files':>6}  ingest")
     for r in rows:
         print(f"{r['id']:14} {r['name'][:24]:24} {'yes' if r['found'] else 'no':5} "
-              f"{r['files']:>6}  {'yes' if r['adapter'] else 'no'}")
+              f"{r['files']:>6}  {'yes' if r['ingest'] else 'no'}")
 
 
 def ingest(args):
@@ -79,7 +79,7 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(prog="agent-usage", description=__doc__)
     sub = ap.add_subparsers(required=True, metavar="command")
-    p = sub.add_parser("agents", help="detected agents, session files, adapter yes/no")
+    p = sub.add_parser("agents", help="detected agents, session files, ingested yes/no")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=agents)
     p = sub.add_parser("ingest", parents=[common, machine],
