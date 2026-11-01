@@ -1,6 +1,24 @@
 # 0001 — Package as a CLI with a vendored agent registry
 
-Status: accepted, not started · 2026-11-01
+Status: accepted; work items 1–6 done, 7 open · 2026-11-01
+
+Implementation notes:
+
+- Claude Code's registry id is `claude` (not `claude-code`); the events table
+  keeps `harness = 'claude-code'`.
+- Adapters skip registry paths they cannot read: Claude Code / Codex
+  `history.jsonl`, Codex `*.jsonl.zst`. New roots now read when present:
+  Claude `transcripts/`, Codex `archived_sessions/`, OMP and Hermes profiles,
+  and every env override.
+- Inner placeholders (`<session-id>`, `YYYY/MM/DD`) glob as `*`; paths starting
+  with one (`<vscode-globalStorage>`, `<app data>`, `<project>`) and `%VAR%`
+  with the variable unset are skipped.
+- Fixtures in `tests/fixtures/home` are synthetic, written to match the record
+  shapes the adapters parse, not samples cut from real transcripts. Replace
+  them with redacted real samples when convenient.
+- Refactor check: `main`'s scripts and the CLI produce identical rows on the
+  fixture home. On a real machine: ingest with both into separate data dirs and
+  run `scripts/compare-events`; differences should be limited to the new roots.
 
 This is a handoff. It is written so an agent that has not seen the original
 conversation can pick the work up from here.

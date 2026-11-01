@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Vendor deja-vu's agent registry at a commit (default: the tip of main).
+
+    scripts/update-registry [ref]
+
+Writes agent_usage/registry/{deja-vu-registry.json,LICENSE,SOURCE}. Review the
+diff (ids and store_paths our adapters rely on) before committing.
+"""
+import json
+import sys
+import urllib.request
+from datetime import date
+from pathlib import Path
+
+REPO = "vshulcz/deja-vu"
+DEST = Path(__file__).resolve().parent.parent / "agent_usage" / "registry"
+
+
+def get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "agent-usage-update-registry"})
+    with urllib.request.urlopen(req) as r:
+        return r.read()
+
+
+def main():
+    ref = sys.argv[1] if len(sys.argv) > 1 else "main"
+    commit = json.loads(get(f"https://api.github.com/repos/{REPO}/commits/{ref}"))
+    sha = commit["sha"]
+    committed = commit["commit"]["committer"]["date"][:10]
+    raw = f"https://raw.githubusercontent.com/{REPO}/{sha}"
+    registry = get(f"{raw}/docs/registry/registry.json")
+    version = json.loads(registry).get("schema_version")
+    if version != 1:
+        sys.exit(f"registry schema_version is {version}, expected 1: check the loader first")
+    (DEST / "deja-vu-registry.json").write_bytes(registry)
+    (DEST / "LICENSE").write_bytes(get(f"{raw}/LICENSE"))
+    (DEST / "SOURCE").write_text(f"""\
+deja-vu-registry.json is docs/registry/registry.json from
+https://github.com/{REPO} (MIT, see LICENSE in this directory).
+
+commit: {sha}
+date: {committed} (fetched {date.today()})
+
+Refresh with scripts/update-registry.
+""")
+    print(f"vendored registry at {sha} ({len(json.loads(registry)['harnesses'])} harnesses)")
+
+
+if __name__ == "__main__":
+    main()

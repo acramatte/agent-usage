@@ -1,0 +1,7 @@
+deja-vu-registry.json is docs/registry/registry.json from
+https://github.com/vshulcz/deja-vu (MIT, see LICENSE in this directory).
+
+commit: 1eae24f2cf46dadec9513ffcfd1d5b10dadede96
+date: 2026-11-01 (fetched 2026-11-01)
+
+Refresh with scripts/update-registry.

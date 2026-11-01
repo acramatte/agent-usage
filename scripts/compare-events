@@ -1,0 +1,43 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["duckdb>=1.1"]
+# ///
+"""Compare two events parquets per harness and event type: counts and sums.
+
+    scripts/compare-events before.parquet after.parquet
+
+Exits non-zero when they differ. Use it to check an adapter refactor leaves
+output unchanged on a real machine (ingest each version into its own --data-dir).
+"""
+import sys
+
+import duckdb
+
+SUMS = """select harness, event_type, count(*), sum(n), sum(input_tokens), sum(output_tokens),
+       sum(cache_read), sum(cache_write), sum(reasoning_tokens), round(sum(cost_usd), 6),
+       count(*) filter (where cost_source = 'estimated'), round(sum(duration_ms)),
+       count(*) filter (where is_error), count(*) filter (where is_subagent),
+       count(distinct session_id)
+from '{}' group by all order by all"""
+COLS = ["events", "n", "input", "output", "cache_read", "cache_write", "reasoning", "cost_usd",
+        "estimated", "duration_ms", "errors", "subagent", "sessions"]
+
+
+def main():
+    a, b = ({r[:2]: r[2:] for r in duckdb.sql(SUMS.format(p)).fetchall()} for p in sys.argv[1:3])
+    same = True
+    for key in sorted(a.keys() | b.keys()):
+        ra, rb = a.get(key), b.get(key)
+        if ra == rb:
+            print(f"same  {key[0]:12} {key[1]:10} {ra[0]} events")
+            continue
+        same = False
+        diffs = [f"{c}: {x} -> {y}" for c, x, y in zip(COLS, ra or [None] * len(COLS),
+                                                       rb or [None] * len(COLS)) if x != y]
+        print(f"DIFF  {key[0]:12} {key[1]:10} " + "; ".join(diffs))
+    sys.exit(0 if same else 1)
+
+
+if __name__ == "__main__":
+    main()

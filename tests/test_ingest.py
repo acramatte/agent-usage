@@ -1,0 +1,146 @@
+import re
+import shutil
+import sqlite3
+from pathlib import Path
+
+import duckdb
+import pytest
+
+from agent_usage import ingest, registry
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A copy of fixtures/home as $HOME, with every variable our adapters'
+    registry paths read unset, so the defaults (~/.claude, ...) apply."""
+    home = tmp_path / "home"
+    shutil.copytree(FIXTURES / "home", home)
+    db = sqlite3.connect(home / ".hermes/state.db")
+    db.executescript((home / ".hermes/state.sql").read_text())
+    db.commit()
+    db.close()
+    monkeypatch.setenv("HOME", str(home))
+    for rid in ingest.ADAPTERS:
+        for p in registry.entry(rid)["store_paths"]:
+            for var in re.findall(r"\$\{(\w+)", p):
+                if var != "HOME":
+                    monkeypatch.delenv(var, raising=False)
+    return home
+
+
+def E(harness, session_id, project, ts, event_type, name, **kw):
+    return dict(ts=ts, machine=None, harness=harness, session_id=session_id, project=project,
+                event_type=event_type, name=name, detail=None, n=1, input_tokens=0,
+                output_tokens=0, cache_read=0, cache_write=0, reasoning_tokens=0,
+                cost_usd=None, cost_source=None, duration_ms=None, is_error=None,
+                is_subagent=False) | kw
+
+
+def normalized(events):
+    rows = [{k: round(v, 9) if isinstance(v, float) else v for k, v in e.items()} for e in events]
+    return sorted(rows, key=lambda r: tuple(str(v) for v in r.values()))
+
+
+# Claude Code cost: session A reports $0.50 for claude-sonnet-4-5, split by price
+# weight (input 1, output 5, cache read 0.1, 5m write 1.25, 1h write 2):
+#   msg_1: 10 + 40*5 + 100*0.1 + 30*1.25 + 20*2 = 297.5
+#   msg_2: 4 + 2*5 = 14
+# Session B has no cost-state; it is estimated at A's rate: 100 + 10*5 = 150 units.
+A_RATE = 0.5 / 311.5
+
+CC = dict(harness="claude-code", project="demo")
+EXPECTED = [
+    E(**CC, session_id="A", ts="2026-10-01T10:00:00.000Z", event_type="skill", name="review", detail="user"),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:01.000Z", event_type="command", name="clear", detail="user"),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:03.000Z", event_type="model_call", name="claude-sonnet-4-5",
+      input_tokens=10, output_tokens=40, cache_read=100, cache_write=50,
+      cost_usd=297.5 * A_RATE, cost_source="reported"),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:03.000Z", event_type="tool_call", name="Bash",
+      is_error=False, duration_ms=1234),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:06.000Z", event_type="model_call", name="claude-sonnet-4-5",
+      input_tokens=4, output_tokens=2, cost_usd=14 * A_RATE, cost_source="reported"),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:06.000Z", event_type="tool_call", name="Skill",
+      is_error=True, duration_ms=2000.0),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:06.000Z", event_type="skill", name="pdf", detail="model"),
+    E(**CC, session_id="B", ts="2026-10-01T11:00:00.000Z", event_type="model_call", name="claude-sonnet-4-5",
+      input_tokens=100, output_tokens=10, cost_usd=150 * A_RATE, cost_source="estimated", is_subagent=True),
+
+    # Codex: the first token_count is the baseline; deltas after it, and
+    # cached tokens are taken out of input_tokens.
+    E("codex", "C1", "api", "2026-10-01T09:00:02.000Z", "tool_call", "shell", is_error=False, duration_ms=500.0),
+    E("codex", "C1", "api", "2026-10-01T09:00:02.000Z", "skill", "deploy", detail="read"),
+    E("codex", "C1", "api", "2026-10-01T09:00:03.000Z", "model_call", "gpt-5-codex",
+      input_tokens=40, cache_read=160, output_tokens=20, reasoning_tokens=10),
+    E("codex", "C1", "api", "2026-10-01T09:00:04.000Z", "tool_call", "apply_patch", is_error=True),
+
+    E("pi", "P1", "cli", "2026-10-02T08:00:01.000Z", "model_call", "claude-opus-4-1",
+      input_tokens=7, output_tokens=3, cache_read=50, cache_write=5, cost_usd=0.01, cost_source="reported"),
+    E("pi", "P1", "cli", "2026-10-02T08:00:01.000Z", "tool_call", "read", is_error=False, duration_ms=2000.0),
+    E("pi", "P1", "cli", "2026-10-02T08:00:01.000Z", "skill", "brainstorm", detail="read"),
+
+    E("omp", "O1", "cli", "2026-10-02T09:00:00.000Z", "model_call", "find-model", detail="find",
+      input_tokens=20, output_tokens=2, reasoning_tokens=1, cost_usd=0.002, cost_source="reported",
+      is_subagent=True),
+    E("omp", "O1", "cli", "2026-10-02T09:00:01.000Z", "model_call", "gpt-5",
+      input_tokens=30, output_tokens=6, reasoning_tokens=4, cost_usd=0.03, cost_source="reported",
+      is_subagent=True),
+    E("omp", "O1", "cli", "2026-10-02T09:00:01.000Z", "tool_call", "read", is_error=True,
+      duration_ms=500.0, is_subagent=True),
+    E("omp", "O1", "cli", "2026-10-02T09:00:01.000Z", "skill", "tdd", detail="read", is_subagent=True),
+
+    E("hermes", "H1", "bot", "2026-09-21T14:13:20+00:00", "model_call", "claude-sonnet-4-5", detail="main",
+      n=3, input_tokens=100, output_tokens=20, cache_read=10, cache_write=5,
+      cost_usd=0.02, cost_source="estimated"),
+    E("hermes", "H2", "bot", "2026-09-21T14:15:00+00:00", "model_call", "gpt-5", detail="compress",
+      input_tokens=10, output_tokens=1, reasoning_tokens=2, cost_usd=0.0015, cost_source="reported",
+      is_subagent=True),
+    E("hermes", "H1", "bot", "2026-09-21T14:13:30+00:00", "tool_call", "skill_view",
+      is_error=True, duration_ms=2500.0),
+    E("hermes", "H1", "bot", "2026-09-21T14:13:30+00:00", "skill", "triage", detail="model"),
+]
+
+
+def test_fixture_events(home):
+    events, inventory = ingest.collect()
+    assert normalized(events) == normalized(EXPECTED)
+    assert inventory == {"claude-code": ["review"]}
+
+
+def test_ingest_keeps_sessions_pruned_from_disk(home, tmp_path):
+    data = tmp_path / "data"
+    dest = ingest.run(data, "m1")
+    shutil.rmtree(home / ".codex/sessions")
+    ingest.run(data, "m1")
+    counts = dict(duckdb.sql(f"select harness, count(*) from '{dest}' group by 1").fetchall())
+    # Codex's session is gone from disk but kept; the others are replaced, not doubled.
+    assert counts == {"claude-code": 8, "codex": 4, "pi": 3, "omp": 4, "hermes": 4}
+
+
+def test_registry_paths(tmp_path, monkeypatch):
+    for d in ["h/state.db", "h/profiles/work/state.db", "h/profiles/x/notes.txt"]:
+        (tmp_path / d).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / d).touch()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "h"))
+    monkeypatch.delenv("DEJA_HERMES_HOME", raising=False)
+    monkeypatch.delenv("DEJA_HERMES_PROFILES_ROOT", raising=False)
+    monkeypatch.delenv("DEJA_HERMES_DB", raising=False)
+    assert registry.files_for("hermes") == [str(tmp_path / "h/state.db"),
+                                            str(tmp_path / "h/profiles/work/state.db")]
+
+    monkeypatch.setenv("HOME", "/u")
+    monkeypatch.delenv("CLINE_SESSION_DATA_DIR", raising=False)
+    monkeypatch.delenv("CLINE_DATA_DIR", raising=False)
+    monkeypatch.setenv("CLINE_DIR", "/c")
+    expand = registry.expand
+    assert expand("${CLINE_SESSION_DATA_DIR:-${CLINE_DATA_DIR:-${CLINE_DIR:-~/.cline}/data}/sessions}/*/x") \
+        == "/c/data/sessions/*/x"
+    monkeypatch.delenv("CLINE_DIR")
+    assert expand("${CLINE_DATA_DIR:-${CLINE_DIR:-~/.cline}/data}") == "/u/.cline/data"
+    assert expand("${CLINE_DIR}/x") is None
+    assert expand("<vscode-globalStorage>/a/tasks/*/h.json") is None
+    assert expand("~/.minimax/v2/sessions/YYYY/MM/DD/<session>/messages.jsonl") \
+        == "/u/.minimax/v2/sessions/*/*/*/*/messages.jsonl"
+    assert expand("cli_sessions.db beside sessions.db (the legacy name)") is None
+    assert registry.braces("/a/{json,jsonl}") == ["/a/json", "/a/jsonl"]

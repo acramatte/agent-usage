@@ -1,20 +1,14 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["duckdb>=1.1"]
-# ///
 """Normalize local agent transcripts into one events table.
 
-Sources: Claude Code (~/.claude/projects), Codex (~/.codex/sessions),
-pi (~/.pi/agent/sessions), OMP (~/.omp/agent/sessions), Hermes (~/.hermes/state.db).
+Sources: Claude Code, Codex, pi, OMP and Hermes, at the store paths the vendored
+registry lists for them (env overrides and profiles included).
 
-Output: data/events-<machine>.parquet and data/skills-<machine>.json
+Output: <data dir>/events-<machine>.parquet and <data dir>/skills-<machine>.json
 """
-import argparse
 import glob
 import json
 import os
 import re
-import socket
 import sqlite3
 import tempfile
 from collections import defaultdict
@@ -23,8 +17,7 @@ from pathlib import Path
 
 import duckdb
 
-HOME = Path.home()
-ROOT = Path(__file__).parent
+from . import registry
 
 # Relative price weights shared by Anthropic models (input = 1). Used only to
 # split a session's reported cost across its calls, and to estimate cost for
@@ -84,10 +77,9 @@ def skill_from_text(s):
 
 # ---------------------------------------------------------------- Claude Code
 
-def claude_code(skill_names):
+def claude_code(files, skill_names):
     out = []
     cost_state = {}  # session -> modelUsage of the last cost-state record
-    files = glob.glob(str(HOME / ".claude/projects/**/*.jsonl"), recursive=True)
     for f in files:
         sub = "/subagents/" in f
         calls = {}  # message.id -> event (usage repeats per content block; keep last)
@@ -179,9 +171,9 @@ def claude_code(skill_names):
 
 # ---------------------------------------------------------------------- Codex
 
-def codex():
+def codex(files):
     out = []
-    for f in glob.glob(str(HOME / ".codex/sessions/**/*.jsonl"), recursive=True):
+    for f in files:
         sid = cwd = model = None
         prev_total = None
         tools = {}
@@ -232,11 +224,11 @@ def codex():
 SKILL_URI = re.compile(r"skill://([A-Za-z0-9_.:-]+)")
 
 
-def pi_like(harness, sessions_dir):
+def pi_like(harness, files):
     """pi and its fork OMP share a session format; OMP adds side-model
     `model_usage` records, `tool_execution_start` timings and `parentSession`."""
     out = []
-    for f in glob.glob(str(sessions_dir / "**/*.jsonl"), recursive=True):
+    for f in files:
         sid = cwd = None
         sub = False
         tools, started = {}, {}
@@ -283,10 +275,11 @@ def pi_like(harness, sessions_dir):
 
 # --------------------------------------------------------------------- Hermes
 
-def hermes():
-    db = HOME / ".hermes/state.db"
-    if not db.exists():
-        return []
+def hermes(dbs):
+    return [e for db in dbs for e in hermes_db(db)]
+
+
+def hermes_db(db):
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     sessions = {r[0]: r[1:] for r in c.execute("select id, cwd, parent_session_id from sessions")}
     out = []
@@ -346,37 +339,51 @@ def skill_inventory():
         "omp": [".omp/agent/skills/**/SKILL.md"],
         "codex": [".codex/skills/**/SKILL.md"],
     }
+    home = Path.home()
     for harness, globs in pats.items():
         for g in globs:
-            for p in glob.glob(str(HOME / g), recursive=True):
+            for p in glob.glob(str(home / g), recursive=True):
                 if "/node_modules/" not in p:
                     inv[harness].add(Path(p).parent.name)
     return {k: sorted(v) for k, v in inv.items()}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default=socket.gethostname().split(".")[0])
-    args = ap.parse_args()
+# Registry id -> (harness name in the events table, store paths the adapter
+# reads, adapter). Claude Code's and Codex's prompt-history files and Codex's
+# zstd rollouts are listed in the registry but carry no usage we can read.
+ADAPTERS = {
+    "claude": ("claude-code", lambda p: "history" not in p.lower(), claude_code),
+    "codex": ("codex", lambda p: p.endswith("rollout-*.jsonl"), lambda f, _: codex(f)),
+    "pi": ("pi", lambda p: True, lambda f, _: pi_like("pi", f)),
+    "omp": ("omp", lambda p: True, lambda f, _: pi_like("omp", f)),
+    "hermes": ("hermes", lambda p: True, lambda f, _: hermes(f)),
+}
 
+
+def collect():
+    """Fresh events from every adapter, and the installed-skill inventory."""
     inv = skill_inventory()
     all_skills = set().union(*inv.values()) if inv else set()
     rows = []
-    for name, fn in [("claude-code", lambda: claude_code(all_skills)), ("codex", codex),
-                     ("pi", lambda: pi_like("pi", HOME / ".pi/agent/sessions")),
-                     ("omp", lambda: pi_like("omp", HOME / ".omp/agent/sessions")), ("hermes", hermes)]:
-        got = fn()
-        print(f"{name:12} {len(got):6} events")
+    for rid, (name, keep, adapter) in ADAPTERS.items():
+        files = registry.files_for(rid, keep)
+        got = adapter(files, all_skills)
+        print(f"{name:12} {len(got):6} events from {len(files)} files")
         rows += got
-    for r in rows:
-        r["machine"] = args.machine
+    return rows, inv
 
-    data = ROOT / "data"
-    data.mkdir(exist_ok=True)
+
+def run(data_dir, machine):
+    rows, inv = collect()
+    for r in rows:
+        r["machine"] = machine
+
+    data = Path(data_dir)
+    data.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".ndjson", delete=False) as tmp:
         for r in rows:
             tmp.write(json.dumps(r) + "\n")
-    dest = data / f"events-{args.machine}.parquet"
+    dest = data / f"events-{machine}.parquet"
     # Harnesses prune old transcripts (Claude Code after ~30 days), so keep
     # previously ingested sessions that are no longer on disk.
     keep = ""
@@ -385,7 +392,8 @@ def main():
           select * from '{dest}' p
           where not exists (select 1 from fresh f where f.harness = p.harness
                             and f.session_id is not distinct from p.session_id)"""
-    duckdb.sql(f"""
+    con = duckdb.connect()
+    con.sql(f"""
         create temp table fresh as
           select cast(ts as timestamptz) as ts, * exclude (ts)
           from read_json('{tmp.name}', format='newline_delimited', columns={{
@@ -396,13 +404,10 @@ def main():
             cost_source:'varchar', duration_ms:'double', is_error:'boolean', is_subagent:'boolean'}})
           where ts is not null
     """)
-    duckdb.sql(f"copy (select * from fresh {keep} order by ts) to '{dest}.tmp' (format parquet)")
+    con.sql(f"copy (select * from fresh {keep} order by ts) to '{dest}.tmp' (format parquet)")
     os.replace(f"{dest}.tmp", dest)
     os.unlink(tmp.name)
-    (data / f"skills-{args.machine}.json").write_text(json.dumps(inv, indent=2))
-    total = duckdb.sql(f"select count(*) from '{dest}'").fetchall()[0][0]
+    (data / f"skills-{machine}.json").write_text(json.dumps(inv, indent=2))
+    total = con.sql(f"select count(*) from '{dest}'").fetchall()[0][0]
     print(f"wrote {dest} ({len(rows)} fresh, {total} total events)")
-
-
-if __name__ == "__main__":
-    main()
+    return dest

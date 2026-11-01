@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"O1","timestamp":"2026-10-02T08:59:59.000Z","cwd":"/work/cli","parentSession":"O0"}
+{"type":"model_usage","timestamp":"2026-10-02T09:00:00.000Z","model":"find-model","purpose":"find","usage":{"input":20,"output":2,"reasoningTokens":1,"cost":{"total":0.002}}}
+{"type":"message","id":"a1","timestamp":"2026-10-02T09:00:01.000Z","message":{"role":"assistant","model":"gpt-5","content":[{"type":"toolCall","id":"t9","name":"read","arguments":{"path":"skill://tdd"}}],"usage":{"input":30,"output":6,"reasoning":4,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.03}}}}
+{"type":"custom","customType":"tool_execution_start","timestamp":"2026-10-02T09:00:02.000Z","data":{"toolCallId":"t9","startedAt":"2026-10-02T09:00:02.000Z"}}
+{"type":"message","id":"r9","timestamp":"2026-10-02T09:00:02.500Z","message":{"role":"toolResult","toolCallId":"t9","toolName":"read","content":[{"type":"text","text":"(redacted)"}],"isError":true}}
