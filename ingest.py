@@ -5,7 +5,7 @@
 """Normalize local agent transcripts into one events table.
 
 Sources: Claude Code (~/.claude/projects), Codex (~/.codex/sessions),
-pi (~/.pi/agent/sessions), Hermes (~/.hermes/state.db).
+pi (~/.pi/agent/sessions), OMP (~/.omp/agent/sessions), Hermes (~/.hermes/state.db).
 
 Output: data/events-<machine>.parquet and data/skills-<machine>.json
 """
@@ -227,38 +227,56 @@ def codex():
     return out
 
 
-# ------------------------------------------------------------------------- pi
+# -------------------------------------------------------------------- pi, OMP
 
-def pi():
+SKILL_URI = re.compile(r"skill://([A-Za-z0-9_.:-]+)")
+
+
+def pi_like(harness, sessions_dir):
+    """pi and its fork OMP share a session format; OMP adds side-model
+    `model_usage` records, `tool_execution_start` timings and `parentSession`."""
     out = []
-    for f in glob.glob(str(HOME / ".pi/agent/sessions/**/*.jsonl"), recursive=True):
+    for f in glob.glob(str(sessions_dir / "**/*.jsonl"), recursive=True):
         sid = cwd = None
-        tools = {}
+        sub = False
+        tools, started = {}, {}
         for d in jsonl(f):
-            if d.get("type") == "session":
-                sid, cwd = d.get("id"), d.get("cwd")
+            t = d.get("type")
+            if t == "session":
+                sid, cwd, sub = d.get("id"), d.get("cwd"), bool(d.get("parentSession"))
                 continue
             m = d.get("message") or {}
-            common = dict(harness="pi", session_id=sid, ts=d.get("timestamp"), project=project_of(cwd))
-            if m.get("role") == "assistant":
-                u = m.get("usage") or {}
-                if u:
-                    out.append(ev(**common, event_type="model_call", name=m.get("model"),
-                        input_tokens=u.get("input", 0), output_tokens=u.get("output", 0),
-                        cache_read=u.get("cacheRead", 0), cache_write=u.get("cacheWrite", 0),
-                        reasoning_tokens=u.get("reasoning", 0),
-                        cost_usd=(u.get("cost") or {}).get("total"), cost_source="reported"))
+            common = dict(harness=harness, session_id=sid, ts=d.get("timestamp"),
+                          project=project_of(cwd), is_subagent=sub)
+
+            def usage_event(model, u, detail=None):
+                return ev(**common, event_type="model_call", name=model, detail=detail,
+                    input_tokens=u.get("input", 0), output_tokens=u.get("output", 0),
+                    cache_read=u.get("cacheRead", 0), cache_write=u.get("cacheWrite", 0),
+                    reasoning_tokens=u.get("reasoning", u.get("reasoningTokens", 0)),
+                    cost_usd=(u.get("cost") or {}).get("total"), cost_source="reported")
+
+            if t == "model_usage" and d.get("usage"):
+                out.append(usage_event(d.get("model"), d["usage"], d.get("purpose")))
+            elif t == "custom" and d.get("customType") == "tool_execution_start":
+                data = d.get("data") or {}
+                started[data.get("toolCallId")] = data.get("startedAt")
+            elif m.get("role") == "assistant":
+                if m.get("usage"):
+                    out.append(usage_event(m.get("model"), m["usage"]))
                 for b in m.get("content") or []:
                     if b.get("type") == "toolCall":
                         e = ev(**common, event_type="tool_call", name=b.get("name"))
                         tools[b.get("id")] = e
-                        skill = skill_from_text(json.dumps(b.get("arguments")))
+                        args = json.dumps(b.get("arguments"))
+                        uri = SKILL_URI.search(args)
+                        skill = uri.group(1) if uri else skill_from_text(args)
                         if skill:
                             out.append(ev(**common, event_type="skill", name=skill, detail="read"))
             elif m.get("role") == "toolResult" and m.get("toolCallId") in tools:
                 e = tools[m["toolCallId"]]
                 e["is_error"] = bool(m.get("isError"))
-                e["duration_ms"] = elapsed_ms(e["ts"], d.get("timestamp"))
+                e["duration_ms"] = elapsed_ms(started.get(m["toolCallId"]) or e["ts"], d.get("timestamp"))
         out += tools.values()
     return out
 
@@ -325,6 +343,7 @@ def skill_inventory():
                         "Development/**/.claude/skills/*/SKILL.md"],
         "hermes": [".hermes/skills/**/SKILL.md"],
         "pi": [".pi/agent/skills/**/SKILL.md"],
+        "omp": [".omp/agent/skills/**/SKILL.md"],
         "codex": [".codex/skills/**/SKILL.md"],
     }
     for harness, globs in pats.items():
@@ -343,7 +362,9 @@ def main():
     inv = skill_inventory()
     all_skills = set().union(*inv.values()) if inv else set()
     rows = []
-    for name, fn in [("claude-code", lambda: claude_code(all_skills)), ("codex", codex), ("pi", pi), ("hermes", hermes)]:
+    for name, fn in [("claude-code", lambda: claude_code(all_skills)), ("codex", codex),
+                     ("pi", lambda: pi_like("pi", HOME / ".pi/agent/sessions")),
+                     ("omp", lambda: pi_like("omp", HOME / ".omp/agent/sessions")), ("hermes", hermes)]:
         got = fn()
         print(f"{name:12} {len(got):6} events")
         rows += got

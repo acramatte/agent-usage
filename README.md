@@ -14,6 +14,7 @@ uv run build.py    # data/*.parquet -> out/dashboard.html (self-contained, open 
 | Claude Code | `~/.claude/projects/**/*.jsonl` (incl. subagents) | per API call | session `cost-state`, split by price weight; estimated when absent | `tool_use` / `tool_result` | `Skill` tool, slash commands matching an installed skill |
 | Codex | `~/.codex/sessions/**/*.jsonl` | `token_count` deltas | none | `function_call`, `custom_tool_call` | reads of `…/skills/<name>/SKILL.md` |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | per message | reported per message | `toolCall` / `toolResult` | reads of `SKILL.md` |
+| OMP | `~/.omp/agent/sessions/**/*.jsonl` | per message, plus side-model `model_usage` records (e.g. `find`) | reported per call | `toolCall` / `toolResult`, timed from `tool_execution_start` | `skill://<name>` or `SKILL.md` reads |
 | Hermes | `~/.hermes/state.db` (read-only) | `session_model_usage` (per session × model × task) | actual, else estimated | `messages.tool_calls` | `skill_view` |
 
 Hermes is read from its local database rather than Langfuse: same data, no API keys.

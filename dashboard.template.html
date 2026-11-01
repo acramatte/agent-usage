@@ -130,8 +130,8 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
 
 <script>
 const DATA = /*__DATA__*/null;
-const HARNESSES = ["claude-code", "hermes", "codex", "pi"];          // fixed slot order
-const HCOLOR = { "claude-code": "--s1", hermes: "--s2", codex: "--s3", pi: "--s4" };
+const HARNESSES = ["claude-code", "hermes", "codex", "pi", "omp"];          // fixed slot order
+const HCOLOR = { "claude-code": "--s1", hermes: "--s2", codex: "--s3", pi: "--s4", omp: "--s5" };
 const col = h => `var(${HCOLOR[h] || "--other"})`;
 const $ = id => document.getElementById(id);
 const fmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(Math.round(n));
