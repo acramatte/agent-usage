@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent usage</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f5f5f3; --surface-1: #fcfcfb; --grid: #e6e5e0; --hover: #f0efec;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --other: #a3a29c;
+  --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --grid: #2c2c2a; --hover: #262624;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #111110; --surface-1: #1a1a19; --grid: #2c2c2a; --hover: #262624;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 28px 16px 64px; }
+h1 { font-size: 22px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--text-secondary); margin: 2px 0 0; font-size: 13px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 20px 0; }
+.seg { display: inline-flex; border: 1px solid var(--grid); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+.seg button { border: 0; background: none; color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--hover); color: var(--text-primary); font-weight: 600; }
+select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--grid);
+  background: var(--surface-1); color: var(--text-primary); }
+label.f { color: var(--text-secondary); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--grid); border-radius: 12px; padding: 14px 16px; }
+.tile .l { color: var(--text-secondary); font-size: 13px; }
+.tile .v { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .d { color: var(--text-muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.card { margin-top: 12px; min-width: 0; }
+.grid2 .card { margin-top: 0; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 4px; font-size: 12px; color: var(--text-secondary); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+svg text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .gl { stroke: var(--grid); stroke-width: 1; }
+svg .hit { fill: transparent; cursor: default; }
+svg .hit:hover, svg .hit:focus { fill: var(--hover); opacity: .55; outline: none; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 500; }
+th:first-child, td:first-child, th.t, td.t { text-align: left; }
+td { font-variant-numeric: tabular-nums; }
+td .key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 8px; }
+.barcell { width: 28%; min-width: 120px; }
+.minibar { height: 10px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.muted { color: var(--text-muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--grid); color: var(--text-secondary); }
+details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
+.note { color: var(--text-muted); font-size: 12px; margin-top: 8px; }
+.err { color: var(--critical); }
+#tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--grid);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgb(0 0 0 / .12);
+  display: none; z-index: 10; min-width: 140px; }
+#tip .h { color: var(--text-secondary); margin-bottom: 4px; }
+#tip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+#tip .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+#tip .k { display: inline-block; width: 10px; height: 2px; margin-right: 6px; vertical-align: middle; }
+.empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent usage</h1>
+  <p class="sub" id="meta"></p>
+
+  <div class="filters">
+    <div class="seg" id="range" role="group" aria-label="Date range">
+      <button data-d="7">7d</button><button data-d="30">30d</button><button data-d="90">90d</button><button data-d="0" aria-pressed="true">All</button>
+    </div>
+    <label class="f">Harness <select id="harness"></select></label>
+    <label class="f">Machine <select id="machine"></select></label>
+  </div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Model calls over time</h2>
+    <p class="sub" id="callsSub">By harness</p>
+    <div class="legend" id="callsLegend"></div>
+    <div id="callsChart"></div>
+    <details><summary>Table view</summary><div class="scroll" id="callsTable"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Models</h2>
+    <p class="sub">Tokens, cache hits and spend per model. Bars show share of total tokens.</p>
+    <div class="scroll" id="models"></div>
+    <p class="note">Spend is only what each harness reports. Codex reports none, and models on a subscription (OAuth) report $0.
+      Claude Code sessions without a cost record are estimated from your other sessions' rates and marked “est.”</p>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Tool calls</h2>
+      <p class="sub">Top tools by call count. Duration is the time from call to result.</p>
+      <div class="scroll" id="tools"></div>
+    </section>
+    <section class="card">
+      <h2>Skills</h2>
+      <p class="sub">Skill loads by the model, plus skills you ran as slash commands.</p>
+      <div class="scroll" id="skills"></div>
+      <h2 style="margin-top:16px">Installed but unused in this range</h2>
+      <div id="unused"></div>
+    </section>
+  </div>
+</main>
+<div id="tip" role="status"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const HARNESSES = ["claude-code", "hermes", "codex", "pi"];          // fixed slot order
+const HCOLOR = { "claude-code": "--s1", hermes: "--s2", codex: "--s3", pi: "--s4" };
+const col = h => `var(${HCOLOR[h] || "--other"})`;
+const $ = id => document.getElementById(id);
+const fmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(Math.round(n));
+const usd = n => n === 0 ? "$0" : n < 0.01 ? "<$0.01" : "$" + n.toFixed(2);
+const pct = x => (x * 100).toFixed(x < 0.1 ? 1 : 0) + "%";
+const el = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+
+// Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations]
+const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [] }));
+const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2] }));
+const state = { days: 0, h: "", m: "" };
+
+function fillSelect(id, values) {
+  const s = $(id); s.append(el("option", { value: "" }, "All"));
+  for (const v of values) s.append(el("option", { value: v }, v));
+  s.onchange = () => { state[id === "harness" ? "h" : "m"] = s.value; render(); };
+}
+fillSelect("harness", HARNESSES.filter(h => R.some(r => r.h === h)));
+fillSelect("machine", [...new Set(R.map(r => r.m))].sort());
+for (const b of $("range").querySelectorAll("button")) b.onclick = () => {
+  for (const x of $("range").querySelectorAll("button")) x.setAttribute("aria-pressed", x === b);
+  state.days = +b.dataset.d; render();
+};
+const days = [...new Set(R.map(r => r.day))].sort();
+$("meta").textContent = `${days[0]} → ${days.at(-1)} · ${new Set(R.map(r => r.m)).size} machine(s) · built ${DATA.built.replace("T", " ")}`;
+
+function cutoff() {
+  if (!state.days) return "";
+  const d = new Date(); d.setDate(d.getDate() - state.days + 1);
+  return d.toISOString().slice(0, 10);
+}
+const keep = (x, c) => x.day >= c && (!state.h || x.h === state.h) && (!state.m || x.m === state.m);
+
+// ------------------------------------------------------------------ tooltip
+const tip = $("tip");
+function showTip(ev, head, rows) {
+  tip.replaceChildren(el("div", { class: "h" }, head));
+  for (const [color, label, value] of rows) {
+    const r = el("div", { class: "r" }); const l = el("span");
+    if (color) { const k = el("span", { class: "k" }); k.style.background = color; l.append(k); }
+    l.append(document.createTextNode(label)); r.append(l, el("b", {}, value)); tip.append(r);
+  }
+  tip.style.display = "block";
+  const box = ev.target.getBoundingClientRect ? ev.target.getBoundingClientRect() : null;
+  const x = ev.clientX ?? (box.left + box.width / 2), y = ev.clientY ?? box.top;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - w - 8, x + 14) + "px";
+  tip.style.top = Math.max(8, y - h - 12) + "px";
+}
+const hideTip = () => tip.style.display = "none";
+
+// ------------------------------------------------------------------- tiles
+function tiles(rows, sess) {
+  const sum = (t, f) => rows.filter(r => r.t === t).reduce((a, r) => a + f(r), 0);
+  const tools = sum("tool_call", r => r.n), errs = sum("tool_call", r => r.e);
+  const est = sum("model_call", r => r.ce);
+  const items = [
+    ["Spend", usd(sum("model_call", r => r.c)), est ? `incl. ${usd(est)} estimated` : "reported by harnesses"],
+    ["Model calls", fmt(sum("model_call", r => r.n)), `${fmt(sum("model_call", r => r.i + r.o + r.cr + r.cw))} tokens`],
+    ["Tool calls", fmt(tools), tools ? `${pct(errs / tools)} errored` : "—"],
+    ["Skill loads", fmt(sum("skill", r => r.n)), `${new Set(rows.filter(r => r.t === "skill").map(r => r.k)).size} distinct skills`],
+    ["Sessions", fmt(sess.length), `${new Set(sess.map(s => s.h)).size} harness(es)`],
+  ];
+  $("tiles").replaceChildren(...items.map(([l, v, d]) => {
+    const t = el("div", { class: "tile" }); t.append(el("div", { class: "l" }, l), el("div", { class: "v" }, v), el("div", { class: "d" }, d)); return t;
+  }));
+}
+
+// ----------------------------------------------------- stacked column chart
+function bucketOf(day, weekly) {
+  if (!weekly) return day;
+  const d = new Date(day + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+function callsChart(rows, c) {
+  const mc = rows.filter(r => r.t === "model_call");
+  const first = c || (mc.length ? mc.map(r => r.day).sort()[0] : "");
+  const spanDays = first ? (Date.now() - new Date(first)) / 864e5 : 0;
+  const weekly = spanDays > 45;
+  $("callsSub").textContent = `${weekly ? "Per week" : "Per day"}, by harness`;
+  const hs = HARNESSES.filter(h => mc.some(r => r.h === h));
+  // Continuous buckets so empty periods show as gaps, not compressed away.
+  const buckets = [];
+  if (first) {
+    const end = new Date(); const d = new Date(bucketOf(first, weekly) + "T00:00:00Z");
+    while (d <= end) { buckets.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + (weekly ? 7 : 1)); }
+  }
+  const val = Object.fromEntries(buckets.map(b => [b, Object.fromEntries(hs.map(h => [h, 0]))]));
+  for (const r of mc) { const b = bucketOf(r.day, weekly); if (val[b]) val[b][r.h] += r.n; }
+
+  $("callsLegend").replaceChildren(...hs.map(h => { const s = el("span"); const i = el("i"); i.style.background = col(h); s.append(i, document.createTextNode(h)); return s; }));
+  const host = $("callsChart");
+  if (!buckets.length || !mc.length) { host.replaceChildren(el("div", { class: "empty" }, "No model calls in this range")); $("callsTable").replaceChildren(); return; }
+
+  const W = Math.max(host.clientWidth || 600, 300), H = 220, ml = 40, mr = 8, mt = 8, mb = 24;
+  const totals = buckets.map(b => hs.reduce((a, h) => a + val[b][h], 0));
+  const max = Math.max(1, ...totals);
+  const step = niceStep(max / 4), top = Math.ceil(max / step) * step;
+  const y = v => mt + (H - mt - mb) * (1 - v / top);
+  const band = (W - ml - mr) / buckets.length, bw = Math.min(24, Math.max(2, band - 2));
+  const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Model calls over time, stacked by harness" });
+  for (let v = 0; v <= top; v += step) {
+    svg.append(svgEl("line", { class: "gl", x1: ml, x2: W - mr, y1: y(v), y2: y(v) }));
+    const t = svgEl("text", { x: ml - 6, y: y(v) + 4, "text-anchor": "end" }); t.textContent = fmt(v); svg.append(t);
+  }
+  const labelEvery = Math.ceil(buckets.length / Math.floor((W - ml) / 64));
+  buckets.forEach((b, i) => {
+    const x = ml + band * i + (band - bw) / 2;
+    let acc = 0; const segs = hs.filter(h => val[b][h] > 0);
+    segs.forEach((h, j) => {
+      const v = val[b][h], y0 = y(acc), y1 = y(acc + v); acc += v;
+      const isTop = j === segs.length - 1, gap = j > 0 ? 2 : 0, hgt = Math.max(1, y0 - y1 - gap);
+      svg.append(svgEl("path", { d: roundTop(x, y0 - gap - hgt, bw, hgt, isTop ? Math.min(4, bw / 2, hgt) : 0), fill: col(h) }));
+    });
+    if (i % labelEvery === 0) {
+      const t = svgEl("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" }); t.textContent = b.slice(5); svg.append(t);
+    }
+    const hit = svgEl("rect", { class: "hit", x: ml + band * i, y: mt, width: band, height: H - mt - mb, tabindex: 0 });
+    const show = ev => showTip(ev, (weekly ? "Week of " : "") + b, [...hs.filter(h => val[b][h]).map(h => [col(h), h, fmt(val[b][h])]), [null, "Total", fmt(totals[i])]]);
+    hit.addEventListener("pointermove", show); hit.addEventListener("focus", show);
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+    svg.insertBefore(hit, svg.firstChild);
+  });
+  host.replaceChildren(svg);
+  table("callsTable", [weekly ? "Week" : "Day", ...hs, "Total"],
+    buckets.map((b, i) => [b, ...hs.map(h => fmt(val[b][h])), fmt(totals[i])]).filter((_, i) => totals[i]));
+}
+function niceStep(raw) { const p = 10 ** Math.floor(Math.log10(raw || 1)); return [1, 2, 5, 10].map(m => m * p).find(s => s >= raw) || p * 10; }
+function roundTop(x, y, w, h, r) {
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+// ------------------------------------------------------------------ tables
+function table(id, head, body, opts = {}) {
+  const t = el("table"), tr = el("tr");
+  head.forEach((h, i) => tr.append(el("th", opts.left?.includes(i) ? { class: "t" } : {}, h)));
+  const th = el("thead"); th.append(tr); t.append(th);
+  const tb = el("tbody"); t.append(tb);
+  for (const row of body) {
+    const r = el("tr");
+    row.forEach((c, i) => {
+      const td = el("td", opts.left?.includes(i) ? { class: "t" } : {});
+      if (c instanceof Node) td.append(c); else td.textContent = c;
+      r.append(td);
+    });
+    tb.append(r);
+  }
+  $(id).replaceChildren(body.length ? t : el("div", { class: "empty" }, "Nothing in this range"));
+}
+const keyed = (h, text) => { const s = el("span"); const k = el("span", { class: "key" }); k.style.background = col(h); s.append(k, document.createTextNode(text)); return s; };
+const bar = (h, frac, tipHead, tipRows) => {
+  const b = el("div", { class: "minibar", tabindex: 0 }); b.style.width = Math.max(1, frac * 100) + "%"; b.style.background = col(h);
+  const show = ev => showTip(ev, tipHead, tipRows); b.addEventListener("pointermove", show); b.addEventListener("focus", show);
+  b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip); return b;
+};
+function group(rows, t) {
+  const g = new Map();
+  for (const r of rows.filter(r => r.t === t)) {
+    const key = r.h + "\u0000" + r.k;
+    const a = g.get(key) || g.set(key, { h: r.h, k: r.k, n: 0, i: 0, o: 0, cr: 0, cw: 0, c: 0, ce: 0, e: 0, du: [] }).get(key);
+    a.n += r.n; a.i += r.i; a.o += r.o; a.cr += r.cr; a.cw += r.cw; a.c += r.c; a.ce += r.ce; a.e += r.e; a.du.push(...r.du);
+  }
+  return [...g.values()];
+}
+const q = (arr, p) => { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+const dur = ms => ms == null ? "—" : ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 1e4 ? 1 : 0) + " s";
+
+function models(rows) {
+  const g = group(rows, "model_call").map(a => ({ ...a, tok: a.i + a.o + a.cr + a.cw })).sort((a, b) => b.tok - a.tok);
+  const max = Math.max(1, ...g.map(a => a.tok));
+  table("models", ["Model", "Calls", "Input", "Output", "Cache read", "Cache hit", "Spend", "Tokens"],
+    g.map(a => {
+      const inTot = a.i + a.cr + a.cw;
+      const spend = a.h === "codex" ? "—" : usd(a.c) + (a.ce > a.c / 2 && a.c > 0 ? " est." : "");
+      return [keyed(a.h, a.k), fmt(a.n), fmt(a.i), fmt(a.o), fmt(a.cr), inTot ? pct(a.cr / inTot) : "—", spend,
+        bar(a.h, a.tok / max, a.k, [[col(a.h), a.h, ""], [null, "Tokens", fmt(a.tok)], [null, "Calls", fmt(a.n)], [null, "Spend", spend]])];
+    }), { left: [0] });
+  const last = $("models").querySelectorAll("th, td"); last.forEach((c, i) => { if (c.cellIndex === 7) c.classList.add("barcell", "t"); });
+}
+
+function tools(rows) {
+  const g = group(rows, "tool_call").sort((a, b) => b.n - a.n).slice(0, 15);
+  const max = Math.max(1, ...g.map(a => a.n));
+  table("tools", ["Tool", "Calls", "", "Errors", "p50", "p95"],
+    g.map(a => {
+      const er = el("span", a.e / a.n >= 0.1 ? { class: "err" } : {}, a.n ? pct(a.e / a.n) : "—");
+      return [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Calls", fmt(a.n)], [null, "Errors", fmt(a.e)]]),
+        er, dur(q(a.du, .5)), dur(q(a.du, .95))];
+    }), { left: [0, 2] });
+  $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
+}
+
+function skills(rows) {
+  const sk = group(rows, "skill").sort((a, b) => b.n - a.n);
+  const cmd = group(rows, "command").sort((a, b) => b.n - a.n);
+  const max = Math.max(1, ...sk.map(a => a.n));
+  table("skills", ["Skill", "Loads", ""],
+    sk.slice(0, 20).map(a => [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Loads", fmt(a.n)]])]),
+    { left: [0, 2] });
+  $("skills").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
+  if (cmd.length) {
+    const p = el("p", { class: "note" }, "Other slash commands: " + cmd.map(a => `/${a.k} ×${a.n}`).join(", "));
+    $("skills").append(p);
+  }
+  const used = new Set(sk.map(a => a.h + "\u0000" + a.k));
+  const box = $("unused"); box.replaceChildren();
+  for (const h of HARNESSES) {
+    if (state.h && state.h !== h) continue;
+    const names = (DATA.inventory[h] || []).filter(n => !used.has(h + "\u0000" + n));
+    if (!names.length) continue;
+    const d = el("details"); d.append(el("summary", {}, `${h}: ${names.length} of ${(DATA.inventory[h] || []).length} unused`));
+    const c = el("div", { class: "chips" }); names.forEach(n => c.append(el("span", { class: "chip" }, n))); d.append(c); box.append(d);
+  }
+  if (!box.children.length) box.append(el("p", { class: "note" }, "Every installed skill was used."));
+}
+
+function render() {
+  const c = cutoff();
+  const rows = R.filter(r => keep(r, c)), sess = S.filter(s => keep(s, c));
+  tiles(rows, sess); callsChart(rows, c); models(rows); tools(rows); skills(rows);
+}
+render();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+</script>
+</body>
+</html>
