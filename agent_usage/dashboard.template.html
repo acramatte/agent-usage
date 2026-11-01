@@ -74,6 +74,9 @@ td .key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; ma
 .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--grid); color: var(--text-secondary); }
 details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
 .note { color: var(--text-muted); font-size: 12px; margin-top: 8px; }
+.note button { all: unset; cursor: pointer; color: var(--text-secondary); text-decoration: underline; }
+.note button:hover { color: var(--text-primary); }
+.note button:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 2px; border-radius: 2px; }
 .err { color: var(--critical); }
 #tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--grid);
   border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgb(0 0 0 / .12);
@@ -148,7 +151,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 // Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations]
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [] }));
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2] }));
-const state = { days: 0, h: "", m: "" };
+const state = { days: 0, h: "", m: "", allTools: false };
 
 function fillSelect(id, values) {
   const s = $(id); s.append(el("option", { value: "" }, "All"));
@@ -340,7 +343,7 @@ function models(rows) {
 }
 
 function tools(rows) {
-  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = all.slice(0, 15);
+  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = state.allTools ? all : all.slice(0, 15);
   const max = Math.max(1, ...g.map(a => a.n));
   table("tools", ["Tool", "Calls", "", "Errors", "p50", "p95"],
     g.map(a => {
@@ -349,7 +352,12 @@ function tools(rows) {
         er, dur(q(a.du, .5)), dur(q(a.du, .95))];
     }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, a.n ? a.e / a.n : null, q(a.du, .5), q(a.du, .95)]) });
   $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
-  if (all.length > g.length) $("tools").append(el("p", { class: "note" }, `Showing the ${g.length} most-called of ${all.length} tools.`));
+  if (all.length > 15) {
+    const p = el("p", { class: "note" }, state.allTools ? `Showing all ${all.length} tools. ` : `Showing the ${g.length} most-called of ${all.length} tools. `);
+    const b = el("button", { type: "button" }, state.allTools ? "Show top 15" : "Show all");
+    b.onclick = () => { state.allTools = !state.allTools; render(); $("tools").querySelector(".note button").focus(); };
+    p.append(b); $("tools").append(p);
+  }
 }
 
 function skills(rows) {
