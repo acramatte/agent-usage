@@ -60,6 +60,10 @@ svg .hit:hover, svg .hit:focus { fill: var(--hover); opacity: .55; outline: none
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th { color: var(--text-secondary); font-weight: 500; }
+th .sort { all: unset; cursor: pointer; }
+th .sort:hover { color: var(--text-primary); }
+th .sort:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 2px; border-radius: 2px; }
+th[aria-sort] { color: var(--text-primary); }
 th:first-child, td:first-child, th.t, td.t { text-align: left; }
 td { font-variant-numeric: tabular-nums; }
 td .key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 8px; }
@@ -115,7 +119,7 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
   <div class="grid2">
     <section class="card">
       <h2>Tool calls</h2>
-      <p class="sub">Top tools by call count. Duration is the time from call to result.</p>
+      <p class="sub">Most-called tools. Duration is the time from call to result.</p>
       <div class="scroll" id="tools"></div>
     </section>
     <section class="card">
@@ -267,9 +271,27 @@ function roundTop(x, y, w, h, r) {
 }
 
 // ------------------------------------------------------------------ tables
+// Per table: [column, 1 ascending | -1 descending]. Rows tie on their default order; missing values sort last.
+const sorts = { models: [7, -1], tools: [1, -1], skills: [1, -1] };
+const cmpKey = (x, y, dir) => x == null ? (y == null ? 0 : 1) : y == null ? -1
+  : (typeof x === "string" ? x.localeCompare(y) : x - y) * dir;
+// opts.keys: one array of raw sort values per body row; a column whose values are undefined is not sortable.
 function table(id, head, body, opts = {}) {
+  const keys = opts.keys, s = sorts[id];
+  if (keys && s) body = body.map((row, i) => [row, keys[i]]).sort((a, b) => cmpKey(a[1][s[0]], b[1][s[0]], s[1])).map(p => p[0]);
   const t = el("table"), tr = el("tr");
-  head.forEach((h, i) => tr.append(el("th", opts.left?.includes(i) ? { class: "t" } : {}, h)));
+  head.forEach((h, i) => {
+    const th = el("th", opts.left?.includes(i) ? { class: "t" } : {});
+    if (!keys?.some(k => k[i] !== undefined)) { th.textContent = h; tr.append(th); return; }
+    const on = s?.[0] === i;
+    if (on) th.setAttribute("aria-sort", s[1] > 0 ? "ascending" : "descending");
+    const b = el("button", { class: "sort", type: "button" }, h + (on ? (s[1] > 0 ? " ▲" : " ▼") : ""));
+    b.onclick = () => {
+      sorts[id] = [i, on ? -s[1] : typeof keys.find(k => k[i] != null)?.[i] === "string" ? 1 : -1];
+      render(); $(id).querySelector(`th:nth-child(${i + 1}) button`).focus();
+    };
+    th.append(b); tr.append(th);
+  });
   const th = el("thead"); th.append(tr); t.append(th);
   const tb = el("tbody"); t.append(tb);
   for (const row of body) {
@@ -310,20 +332,24 @@ function models(rows) {
       const spend = a.h === "codex" ? "—" : usd(a.c) + (a.ce > a.c / 2 && a.c > 0 ? " est." : "");
       return [keyed(a.h, a.k), fmt(a.n), fmt(a.i), fmt(a.o), fmt(a.cr), inTot ? pct(a.cr / inTot) : "—", spend,
         bar(a.h, a.tok / max, a.k, [[col(a.h), a.h, ""], [null, "Tokens", fmt(a.tok)], [null, "Calls", fmt(a.n)], [null, "Spend", spend]])];
-    }), { left: [0] });
+    }), { left: [0], keys: g.map(a => {
+      const inTot = a.i + a.cr + a.cw;
+      return [a.k, a.n, a.i, a.o, a.cr, inTot ? a.cr / inTot : null, a.h === "codex" ? null : a.c, a.tok];
+    }) });
   const last = $("models").querySelectorAll("th, td"); last.forEach((c, i) => { if (c.cellIndex === 7) c.classList.add("barcell", "t"); });
 }
 
 function tools(rows) {
-  const g = group(rows, "tool_call").sort((a, b) => b.n - a.n).slice(0, 15);
+  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = all.slice(0, 15);
   const max = Math.max(1, ...g.map(a => a.n));
   table("tools", ["Tool", "Calls", "", "Errors", "p50", "p95"],
     g.map(a => {
       const er = el("span", a.e / a.n >= 0.1 ? { class: "err" } : {}, a.n ? pct(a.e / a.n) : "—");
       return [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Calls", fmt(a.n)], [null, "Errors", fmt(a.e)]]),
         er, dur(q(a.du, .5)), dur(q(a.du, .95))];
-    }), { left: [0, 2] });
+    }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, a.n ? a.e / a.n : null, q(a.du, .5), q(a.du, .95)]) });
   $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
+  if (all.length > g.length) $("tools").append(el("p", { class: "note" }, `Showing the ${g.length} most-called of ${all.length} tools.`));
 }
 
 function skills(rows) {
@@ -332,8 +358,9 @@ function skills(rows) {
   const max = Math.max(1, ...sk.map(a => a.n));
   table("skills", ["Skill", "Loads", ""],
     sk.slice(0, 20).map(a => [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Loads", fmt(a.n)]])]),
-    { left: [0, 2] });
+    { left: [0, 2], keys: sk.slice(0, 20).map(a => [a.k, a.n, undefined]) });
   $("skills").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
+  if (sk.length > 20) $("skills").append(el("p", { class: "note" }, `Showing the 20 most-loaded of ${sk.length} skills.`));
   if (cmd.length) {
     const p = el("p", { class: "note" }, "Other slash commands: " + cmd.map(a => `/${a.k} ×${a.n}`).join(", "));
     $("skills").append(p);
