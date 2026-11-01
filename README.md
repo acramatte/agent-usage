@@ -2,6 +2,13 @@
 
 Skills, tool calls and model usage across local coding agents, in one table and one page.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.png">
+  <img alt="agent-usage dashboard: spend, model call, tool call, skill and session totals; weekly model calls stacked by harness; per-model tokens, cache hits and spend; top tools with error rate and p50/p95 duration; skill loads and installed-but-unused skills" src="docs/screenshots/dashboard-light.png">
+</picture>
+
+<sub>Synthetic data from <code>scripts/demo-data</code>.</sub>
+
 ```sh
 uv tool install git+https://github.com/acramatte/agent-usage   # or: uv tool install .
 agent-usage agents      # which agents are on this machine, session files, ingested yes/no
@@ -56,4 +63,8 @@ put the other machines' files in the data dir and `dashboard` reads them all.
 ```sh
 uv run pytest                     # adapters against tests/fixtures/home (synthetic, redacted)
 scripts/compare-events a.parquet b.parquet   # counts and sums per harness / event type
+scripts/demo-data /tmp/demo && uv run agent-usage dashboard --data-dir /tmp/demo   # README screenshots
 ```
+
+The screenshots are full-page captures at 1280px wide, 2x, with
+`document.documentElement.dataset.theme` set to `light` / `dark`, quantized to 256 colours.

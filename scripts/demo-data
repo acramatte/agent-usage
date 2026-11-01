@@ -1,0 +1,94 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["duckdb>=1.1"]
+# ///
+"""Write synthetic events for two machines over the last 60 days, for screenshots.
+
+    scripts/demo-data /tmp/demo && agent-usage dashboard --data-dir /tmp/demo
+
+Seeded, so the same day gives the same data. Nothing here comes from real transcripts.
+"""
+import json
+import random
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import duckdb
+
+# harness -> (models with $/Mtok input, output; None = no cost reported), tools, skills
+HARNESSES = {
+    "claude-code": ([("claude-sonnet-4-5", 3, 15), ("claude-opus-4-1", 15, 75), ("claude-haiku-4-5", 1, 5)],
+                    ["Bash", "Read", "Edit", "Grep", "Glob", "Write", "TodoWrite", "Task", "WebFetch"],
+                    ["code-review", "frontend-design", "pdf", "commit", "debugging"]),
+    "codex": ([("gpt-5-codex", None, None), ("gpt-5", None, None)],
+              ["shell", "apply_patch", "update_plan", "view_image"], ["code-review", "testing"]),
+    "hermes": ([("anthropic/claude-sonnet-4.5", 3, 15), ("google/gemini-2.5-flash", 0.3, 2.5)],
+               ["terminal", "read_file", "web_search", "patch", "browser_navigate"],
+               ["research", "arxiv", "plan"]),
+    "pi": ([("claude-sonnet-4-5", 3, 15)], ["bash", "read", "edit", "write"], ["commit"]),
+    "omp": ([("gpt-5-mini", 0.25, 2), ("claude-haiku-4-5", 1, 5)], ["bash", "read", "edit", "find", "grep"],
+            ["debugging"]),
+}
+WEIGHT = {"claude-code": 6, "codex": 3, "hermes": 2, "pi": 1, "omp": 1}
+UNUSED = {"claude-code": ["xlsx", "docx", "mcp-builder", "canvas-design"], "codex": ["release-notes"],
+          "hermes": ["youtube", "obsidian"]}
+PROJECTS = ["agent-usage", "funes", "website", "infra", "notes"]
+
+
+def events(rng, machine, scale):
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    for d in range(60, -1, -1):
+        day = today - timedelta(days=d)
+        busy = (0.4 if day.weekday() >= 5 else 1.0) * (0.5 + (60 - d) / 80) * scale
+        for h, w in WEIGHT.items():
+            if h == "codex" and d > 35:  # started using it later
+                continue
+            for s in range(rng.randint(0, max(1, round(w * busy)))):
+                sid = f"{machine}-{h}-{d}-{s}"
+                t = day + timedelta(hours=rng.uniform(8, 22))
+                models, tools, skills = HARNESSES[h]
+                base = dict(machine=machine, harness=h, session_id=sid, project=rng.choice(PROJECTS), n=1,
+                            detail=None, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0,
+                            reasoning_tokens=0, cost_usd=None, cost_source=None, duration_ms=None,
+                            is_error=None, is_subagent=False)
+                if rng.random() < 0.5:
+                    yield base | dict(ts=t.isoformat(), event_type="skill", name=rng.choice(skills))
+                model, pin, pout = rng.choices(models, weights=range(len(models), 0, -1))[0]
+                cache = rng.uniform(0.1, 1.5)
+                for _ in range(rng.randint(4, 40)):
+                    t += timedelta(seconds=rng.uniform(5, 90))
+                    i, o = rng.randint(200, 6000), rng.randint(100, 3000)
+                    cr, cw = round(cache * rng.randint(10_000, 90_000)), rng.randint(0, 4000)
+                    cost = None if pin is None else (i * pin + o * pout + cr * pin * 0.1 + cw * pin * 1.25) / 1e6
+                    yield base | dict(ts=t.isoformat(), event_type="model_call", name=model, input_tokens=i,
+                                      output_tokens=o, cache_read=cr, cache_write=cw, cost_usd=cost,
+                                      cost_source=None if cost is None else "reported")
+                    for _ in range(rng.choice([0, 1, 1, 2])):
+                        tool = rng.choices(tools, weights=range(len(tools), 0, -1))[0]
+                        yield base | dict(ts=t.isoformat(), event_type="tool_call", name=tool,
+                                          duration_ms=rng.lognormvariate(6.5, 1.2), is_error=rng.random() < 0.04)
+
+
+def main(out):
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(1)
+    con = duckdb.connect()
+    for machine, scale in [("laptop", 1.0), ("workstation", 0.6)]:
+        with tempfile.NamedTemporaryFile("w", suffix=".ndjson") as tmp:
+            for e in events(rng, machine, scale):
+                tmp.write(json.dumps(e) + "\n")
+            tmp.flush()
+            con.sql(f"""copy (select cast(ts as timestamptz) as ts, * exclude (ts)
+                              from read_json('{tmp.name}', format='newline_delimited'))
+                        to '{out}/events-{machine}.parquet' (format parquet)""")
+        inv = {h: sorted(set(v[2]) | set(UNUSED.get(h, []))) for h, v in HARNESSES.items()}
+        (out / f"skills-{machine}.json").write_text(json.dumps(inv, indent=2))
+    print(f"wrote demo data to {out}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1] if len(sys.argv) > 1 else "demo-data")
