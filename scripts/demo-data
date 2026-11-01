@@ -20,16 +20,16 @@ import duckdb
 
 # harness -> (models with $/Mtok input, output; None = no cost reported), tools, skills
 HARNESSES = {
-    "claude-code": ([("claude-sonnet-4-5", 3, 15), ("claude-opus-4-1", 15, 75), ("claude-haiku-4-5", 1, 5)],
+    "claude-code": ([("claude-opus-5-5", 4, 20), ("claude-sonnet-5-5", 3, 15), ("claude-haiku-5-5", 1, 5)],
                     ["Bash", "Read", "Edit", "Grep", "Glob", "Write", "TodoWrite", "Task", "WebFetch"],
                     ["code-review", "frontend-design", "pdf", "commit", "debugging"]),
-    "codex": ([("gpt-5-codex", None, None), ("gpt-5", None, None)],
+    "codex": ([("gpt-6.1-sol", None, None), ("gpt-6-astra", None, None)],
               ["shell", "apply_patch", "update_plan", "view_image"], ["code-review", "testing"]),
-    "hermes": ([("anthropic/claude-sonnet-4.5", 3, 15), ("google/gemini-2.5-flash", 0.3, 2.5)],
+    "hermes": ([("anthropic/claude-sonnet-5.5", 3, 15), ("google/gemini-4-argon", 2, 12)],
                ["terminal", "read_file", "web_search", "patch", "browser_navigate"],
                ["research", "arxiv", "plan"]),
-    "pi": ([("claude-sonnet-4-5", 3, 15)], ["bash", "read", "edit", "write"], ["commit"]),
-    "omp": ([("gpt-5-mini", 0.25, 2), ("claude-haiku-4-5", 1, 5)], ["bash", "read", "edit", "find", "grep"],
+    "pi": ([("claude-opus-5-5", 4, 20)], ["bash", "read", "edit", "write"], ["commit"]),
+    "omp": ([("gpt-6.1-terra", 1, 5), ("claude-haiku-5-5", 1, 5)], ["bash", "read", "edit", "find", "grep"],
             ["debugging"]),
 }
 WEIGHT = {"claude-code": 6, "codex": 3, "hermes": 2, "pi": 1, "omp": 1}
