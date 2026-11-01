@@ -54,9 +54,16 @@ since pruned (Claude Code deletes transcripts after ~30 days), so run it regular
 
 ## Multiple machines
 
-Each machine writes its own `events-<hostname>.parquet`. `agent-usage push` uploads
-this machine's files to a (private) HF dataset, e.g. next to `acramatte/funes-memory`;
-put the other machines' files in the data dir and `dashboard` reads them all.
+Each machine writes its own `events-<hostname>.parquet`, and `dashboard` reads every
+one in the data dir. To share them through a private
+[Hugging Face dataset](https://huggingface.co/docs/hub/datasets):
+
+```sh
+hf auth login                              # once per machine, write token
+agent-usage push --repo <user>/<dataset>   # on each machine; creates the dataset if missing
+hf download <user>/<dataset> --repo-type dataset --local-dir ~/.local/share/agent-usage
+agent-usage dashboard
+```
 
 ## Development
 
