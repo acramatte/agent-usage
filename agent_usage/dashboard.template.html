@@ -10,7 +10,7 @@
   color-scheme: light;
   --surface-0: #f5f5f3; --surface-1: #fcfcfb; --grid: #e6e5e0; --hover: #f0efec;
   --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --other: #a3a29c;
+  --s1: #2a78d6; --s2: #d97757; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --other: #a3a29c;
   --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -18,14 +18,14 @@
     color-scheme: dark;
     --surface-0: #111110; --surface-1: #1a1a19; --grid: #2c2c2a; --hover: #262624;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
+    --s1: #3987e5; --s2: #d97757; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --surface-0: #111110; --surface-1: #1a1a19; --grid: #2c2c2a; --hover: #262624;
   --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
+  --s1: #3987e5; --s2: #d97757; --s3: #199e70; --s4: #c98500; --s5: #d55181; --other: #6b6a65;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--surface-0); color: var(--text-primary);
@@ -132,7 +132,7 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
 <script>
 const DATA = /*__DATA__*/null;
 const HARNESSES = ["claude-code", "hermes", "codex", "pi", "omp"];          // fixed slot order
-const HCOLOR = { "claude-code": "--s1", hermes: "--s2", codex: "--s3", pi: "--s4", omp: "--s5" };
+const HCOLOR = { "claude-code": "--s2", hermes: "--s1", codex: "--s3", pi: "--s4", omp: "--s5" };
 const col = h => `var(${HCOLOR[h] || "--other"})`;
 const $ = id => document.getElementById(id);
 const fmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(Math.round(n));
