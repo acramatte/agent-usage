@@ -26,17 +26,21 @@ def entry(harness_id):
 def expand(pattern):
     """A registry store path as a glob pattern for this machine, or None when it
     names an unset variable without a default or an unresolved location."""
+    # Defaults are rescanned (they nest); environment values are not, so a
+    # value containing ${...} or %...% cannot expand again or loop forever.
+    env = lambda v: v.replace("$", "\0").replace("%", "\1")
     s = pattern
     while m := VAR.search(s):
-        value = os.environ.get(m.group(1)) or m.group(2)
+        value = env(os.environ.get(m.group(1)) or "") or m.group(2)
         if not value:
             return None
         s = s[:m.start()] + value + s[m.end():]
     while m := WINVAR.search(s):
-        value = os.environ.get(m.group(1))
+        value = env(os.environ.get(m.group(1)) or "")
         if not value:
             return None
         s = s[:m.start()] + value + s[m.end():]
+    s = s.replace("\0", "$").replace("\1", "%")
     if s.startswith("<"):  # <vscode-globalStorage>, <app data>, <project>, ...
         return None
     s = os.path.expanduser(s)

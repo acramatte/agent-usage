@@ -50,6 +50,13 @@ def dashboard(args):
         webbrowser.open(out.resolve().as_uri())
 
 
+def machine_name(s):
+    """--machine names files in the data dir and the dataset: no path parts."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", s):
+        raise argparse.ArgumentTypeError(f"not a valid machine name: {s!r}")
+    return s
+
+
 def own_files(machine):
     return [f"events-{machine}.parquet", f"skills-{machine}.json"]
 
@@ -98,7 +105,7 @@ def main(argv=None):
                         help="where events-*.parquet live (default: $AGENT_USAGE_DATA "
                              "or $XDG_DATA_HOME/agent-usage)")
     machine = argparse.ArgumentParser(add_help=False)
-    machine.add_argument("--machine", default=socket.gethostname().split(".")[0])
+    machine.add_argument("--machine", type=machine_name, default=socket.gethostname().split(".")[0])
 
     ap = argparse.ArgumentParser(prog="agent-usage", description=__doc__)
     sub = ap.add_subparsers(required=True, metavar="command")

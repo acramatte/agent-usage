@@ -34,7 +34,7 @@ below have usage adapters; `agents` lists the rest as found/not found.
 
 | Harness | Read from | Model usage | Cost | Tools | Skills |
 |---|---|---|---|---|---|
-| Claude Code | `~/.claude/{projects,transcripts}/**/*.jsonl` (incl. subagents) | per API call | session `cost-state`, split by price weight; estimated when absent | `tool_use` / `tool_result` | `Skill` tool, slash commands matching an installed skill |
+| Claude Code | `~/.claude/{projects,transcripts}/**/*.jsonl` (incl. subagents) | per API call, plus per-session totals of background models (title generation, ...) from `cost-state` | session `cost-state`, split by price weight; estimated when absent | `tool_use` / `tool_result` | `Skill` tool, slash commands matching an installed skill |
 | Codex | `~/.codex/{sessions,archived_sessions}/**/rollout-*.jsonl` | `token_count` deltas | none | `function_call`, `custom_tool_call` | reads of `…/skills/<name>/SKILL.md` |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | per message | reported per message | `toolCall` / `toolResult` | reads of `SKILL.md` |
 | OMP | `~/.omp/agent/sessions/**/*.jsonl`, `~/.omp/profiles/*/agent/sessions` | per message, plus side-model `model_usage` records (e.g. `find`) | reported per call | `toolCall` / `toolResult`, timed from `tool_execution_start` | `skill://<name>` or `SKILL.md` reads |
@@ -46,7 +46,7 @@ Hermes is read from its local database rather than Langfuse: same data, no API k
 
 One row per event: `ts, machine, harness, session_id, project, event_type`
 (`model_call | tool_call | skill | command`), `name` (model / tool / skill), `detail`,
-`n` (call count; >1 only for Hermes aggregates), token columns, `cost_usd`, `cost_source`
+`n` (call count; >1 only for Hermes aggregates; a Claude Code background-model total counts as 1), token columns, `cost_usd`, `cost_source`
 (`reported | estimated`), `duration_ms`, `is_error`, `is_subagent`.
 
 Re-running `ingest` replaces sessions still on disk and keeps the ones a harness has

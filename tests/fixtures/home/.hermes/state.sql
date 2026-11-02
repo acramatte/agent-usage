@@ -16,4 +16,12 @@ insert into messages (session_id, role, content, tool_call_id, tool_calls, times
   ('H1', 'user', '(redacted)', null, null, 1790000005.0),
   ('H1', 'assistant', '(redacted)', null, '[]', 1790000006.0),
   ('H1', 'assistant', null, null, '[{"id":"h1","type":"function","function":{"name":"skill_view","arguments":"{\"name\":\"ops:triage\"}"}}]', 1790000010.0),
-  ('H1', 'tool', '{"success": false, "error": "(redacted)"}', 'h1', null, 1790000012.5);
+  ('H1', 'tool', '{"success": false, "error": "(redacted)"}', 'h1', null, 1790000012.5),
+  -- Reading a skill's supporting file is a tool call, not a skill load.
+  ('H1', 'assistant', null, null, '[{"id":"h2","type":"function","function":{"name":"skill_view","arguments":"{\"name\":\"ops:triage\",\"file_path\":\"references/x.md\"}"}}]', 1790000013.0),
+  ('H1', 'tool', '{"success": true}', 'h2', null, 1790000014.0),
+  -- Copies of h1: a duplicate row, then the retained tail Hermes rewrites into
+  -- the compression continuation H2 with fresh timestamps milliseconds apart.
+  ('H1', 'assistant', null, null, '[{"id":"h1","type":"function","function":{"name":"skill_view","arguments":"{\"name\":\"ops:triage\"}"}}]', 1790000010.0),
+  ('H2', 'assistant', null, null, '[{"id":"h1","type":"function","function":{"name":"skill_view","arguments":"{\"name\":\"ops:triage\"}"}}]', 1790000100.002),
+  ('H2', 'tool', '{"success": false, "error": "(redacted)"}', 'h1', null, 1790000100.004);

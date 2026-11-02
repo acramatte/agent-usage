@@ -150,7 +150,8 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 
 // Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations]
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [] }));
-const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2] }));
+// Session: [day it was active, machine, harness, session number]
+const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2], id: s[3] }));
 const state = { days: 0, h: "", m: "", all: { tools: false, skills: false } };
 
 function fillSelect(id, values) {
@@ -165,12 +166,14 @@ for (const b of $("range").querySelectorAll("button")) b.onclick = () => {
   state.days = +b.dataset.d; render();
 };
 const days = [...new Set(R.map(r => r.day))].sort();
-$("meta").textContent = `${days[0]} → ${days.at(-1)} · ${new Set(R.map(r => r.m)).size} machine(s) · built ${DATA.built.replace("T", " ")}`;
+$("meta").textContent = `${days.length ? `${days[0]} → ${days.at(-1)}` : "No events"} · ${new Set(R.map(r => r.m)).size} machine(s) · built ${DATA.built.replace("T", " ")}`;
 
+// Days are local dates (the page was built with the same calendar).
+const localDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 function cutoff() {
   if (!state.days) return "";
   const d = new Date(); d.setDate(d.getDate() - state.days + 1);
-  return d.toISOString().slice(0, 10);
+  return localDay(d);
 }
 const keep = (x, c) => x.day >= c && (!state.h || x.h === state.h) && (!state.m || x.m === state.m);
 
@@ -202,7 +205,7 @@ function tiles(rows, sess) {
     ["Model calls", fmt(sum("model_call", r => r.n)), `${fmt(sum("model_call", r => r.i + r.o + r.cr + r.cw))} tokens`],
     ["Tool calls", fmt(tools), tools ? `${pct(errs / tools)} errored` : "—"],
     ["Skill loads", fmt(sum("skill", r => r.n)), `${new Set(rows.filter(r => r.t === "skill").map(r => r.k)).size} distinct skills`],
-    ["Sessions", fmt(sess.length), `${new Set(sess.map(s => s.h)).size} harness(es)`],
+    ["Sessions", fmt(new Set(sess.map(s => s.id)).size), `${new Set(sess.map(s => s.h)).size} harness(es)`],
   ];
   $("tiles").replaceChildren(...items.map(([l, v, d]) => {
     const t = el("div", { class: "tile" }); t.append(el("div", { class: "l" }, l), el("div", { class: "v" }, v), el("div", { class: "d" }, d)); return t;
@@ -225,7 +228,7 @@ function callsChart(rows, c) {
   // Continuous buckets so empty periods show as gaps, not compressed away.
   const buckets = [];
   if (first) {
-    const end = new Date(); const d = new Date(bucketOf(first, weekly) + "T00:00:00Z");
+    const end = new Date(localDay(new Date()) + "T00:00:00Z"), d = new Date(bucketOf(first, weekly) + "T00:00:00Z");
     while (d <= end) { buckets.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + (weekly ? 7 : 1)); }
   }
   const val = Object.fromEntries(buckets.map(b => [b, Object.fromEntries(hs.map(h => [h, 0]))]));
@@ -319,11 +322,14 @@ function group(rows, t) {
   for (const r of rows.filter(r => r.t === t)) {
     const key = r.h + "\u0000" + r.k;
     const a = g.get(key) || g.set(key, { h: r.h, k: r.k, n: 0, i: 0, o: 0, cr: 0, cw: 0, c: 0, ce: 0, e: 0, du: [] }).get(key);
-    a.n += r.n; a.i += r.i; a.o += r.o; a.cr += r.cr; a.cw += r.cw; a.c += r.c; a.ce += r.ce; a.e += r.e; a.du.push(...r.du);
+    a.n += r.n; a.i += r.i; a.o += r.o; a.cr += r.cr; a.cw += r.cw; a.c += r.c; a.ce += r.ce; a.e += r.e;
+    for (const d of r.du) a.du.push(d);
   }
+  for (const a of g.values()) a.du.sort((x, y) => x - y);
   return [...g.values()];
 }
-const q = (arr, p) => { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+// p-quantile of durations group() has sorted.
+const q = (sorted, p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : null;
 const dur = ms => ms == null ? "—" : ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 1e4 ? 1 : 0) + " s";
 
 function models(rows) {
@@ -382,9 +388,11 @@ function skills(rows) {
   const box = $("unused"); box.replaceChildren();
   for (const h of HARNESSES) {
     if (state.h && state.h !== h) continue;
-    const names = (DATA.inventory[h] || []).filter(n => !used.has(h + "\u0000" + n));
+    const installed = [...new Set(Object.entries(DATA.inventory).filter(([m]) => !state.m || m === state.m)
+      .flatMap(([, inv]) => inv[h] || []))].sort();
+    const names = installed.filter(n => !used.has(h + "\u0000" + n));
     if (!names.length) continue;
-    const d = el("details"); d.append(el("summary", {}, `${h}: ${names.length} of ${(DATA.inventory[h] || []).length} unused`));
+    const d = el("details"); d.append(el("summary", {}, `${h}: ${names.length} of ${installed.length} unused`));
     const c = el("div", { class: "chips" }); names.forEach(n => c.append(el("span", { class: "chip" }, n))); d.append(c); box.append(d);
   }
   if (!box.children.length) box.append(el("p", { class: "note" }, "Every installed skill was used."));

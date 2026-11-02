@@ -1,3 +1,4 @@
+import json
 import re
 import shutil
 import sqlite3
@@ -21,12 +22,16 @@ def home(tmp_path, monkeypatch):
     db.executescript((home / ".hermes/state.sql").read_text())
     db.commit()
     db.close()
+    # A project Claude Code has run in, with a project-level skill.
+    (home / "work/demo/.claude/skills/ship").mkdir(parents=True)
+    (home / "work/demo/.claude/skills/ship/SKILL.md").write_text("---\nname: ship\n---\n")
+    (home / ".claude.json").write_text(json.dumps({"projects": {str(home / "work/demo"): {}}}))
     monkeypatch.setenv("HOME", str(home))
-    for rid in ingest.ADAPTERS:
-        for p in registry.entry(rid)["store_paths"]:
-            for var in re.findall(r"\$\{(\w+)", p):
-                if var != "HOME":
-                    monkeypatch.delenv(var, raising=False)
+    paths = [p for rid in ingest.ADAPTERS for p in registry.entry(rid)["store_paths"]]
+    for p in paths + [p for ps in ingest.SKILL_PATHS.values() for p in ps]:
+        for var in re.findall(r"\$\{(\w+)", p):
+            if var != "HOME":
+                monkeypatch.delenv(var, raising=False)
     return home
 
 
@@ -43,7 +48,8 @@ def normalized(events):
     return sorted(rows, key=lambda r: tuple(str(v) for v in r.values()))
 
 
-# Claude Code cost: session A reports $0.50 for claude-sonnet-4-5, split by price
+# Claude Code cost: session A reports $0.50 for claude-sonnet-4-5 (keyed
+# claude-sonnet-4-5[1m] in cost-state, as 1M-context sessions are), split by price
 # weight (input 1, output 5, cache read 0.1, 5m write 1.25, 1h write 2):
 #   msg_1: 10 + 40*5 + 100*0.1 + 30*1.25 + 20*2 = 297.5
 #   msg_2: 4 + 2*5 = 14
@@ -54,6 +60,9 @@ CC = dict(harness="claude-code", project="demo")
 EXPECTED = [
     E(**CC, session_id="A", ts="2026-10-01T10:00:00.000Z", event_type="skill", name="review", detail="user"),
     E(**CC, session_id="A", ts="2026-10-01T10:00:01.000Z", event_type="command", name="clear", detail="user"),
+    # A project-level skill; a Hermes skill's name is still a command here.
+    E(**CC, session_id="A", ts="2026-10-01T10:00:01.200Z", event_type="skill", name="ship", detail="user"),
+    E(**CC, session_id="A", ts="2026-10-01T10:00:01.300Z", event_type="command", name="triage", detail="user"),
     E(**CC, session_id="A", ts="2026-10-01T10:00:03.000Z", event_type="model_call", name="claude-sonnet-4-5",
       input_tokens=10, output_tokens=40, cache_read=100, cache_write=50,
       cost_usd=297.5 * A_RATE, cost_source="reported"),
@@ -63,12 +72,18 @@ EXPECTED = [
       input_tokens=4, output_tokens=2, cost_usd=14 * A_RATE, cost_source="reported"),
     E(**CC, session_id="A", ts="2026-10-01T10:00:06.000Z", event_type="tool_call", name="Skill",
       is_error=True, duration_ms=2000.0),
+    # Invoked as anthropic-skills:pdf; installed as .../skills/pdf.
     E(**CC, session_id="A", ts="2026-10-01T10:00:06.000Z", event_type="skill", name="pdf", detail="model"),
+    # Background model in cost-state only: its totals, as one call.
+    E(**CC, session_id="A", ts="2026-10-01T10:00:10.000Z", event_type="model_call", name="claude-haiku-4-5",
+      detail="background", input_tokens=300, output_tokens=20, cost_usd=0.0004, cost_source="reported"),
     E(**CC, session_id="B", ts="2026-10-01T11:00:00.000Z", event_type="model_call", name="claude-sonnet-4-5",
       input_tokens=100, output_tokens=10, cost_usd=150 * A_RATE, cost_source="estimated", is_subagent=True),
 
-    # Codex: the first token_count is the baseline; deltas after it, and
-    # cached tokens are taken out of input_tokens.
+    # Codex: deltas of the running totals, the first one included; a repeated
+    # token_count adds nothing, and cached tokens are taken out of input_tokens.
+    E("codex", "C1", "api", "2026-10-01T09:00:01.000Z", "model_call", "gpt-5-codex",
+      input_tokens=60, cache_read=40, output_tokens=10, reasoning_tokens=5),
     E("codex", "C1", "api", "2026-10-01T09:00:02.000Z", "tool_call", "shell", is_error=False, duration_ms=500.0),
     E("codex", "C1", "api", "2026-10-01T09:00:02.000Z", "skill", "deploy", detail="read"),
     E("codex", "C1", "api", "2026-10-01T09:00:03.000Z", "model_call", "gpt-5-codex",
@@ -99,13 +114,15 @@ EXPECTED = [
     E("hermes", "H1", "bot", "2026-09-21T14:13:30+00:00", "tool_call", "skill_view",
       is_error=True, duration_ms=2500.0),
     E("hermes", "H1", "bot", "2026-09-21T14:13:30+00:00", "skill", "triage", detail="model"),
+    E("hermes", "H1", "bot", "2026-09-21T14:13:33+00:00", "tool_call", "skill_view",
+      is_error=False, duration_ms=1000.0),
 ]
 
 
 def test_fixture_events(home):
     events, inventory = ingest.collect()
     assert normalized(events) == normalized(EXPECTED)
-    assert inventory == {"claude-code": ["review"]}
+    assert inventory == {"claude-code": ["review", "ship"], "hermes": ["triage"]}
 
 
 def test_ingest_keeps_sessions_pruned_from_disk(home, tmp_path):
@@ -115,7 +132,20 @@ def test_ingest_keeps_sessions_pruned_from_disk(home, tmp_path):
     ingest.run(data, "m1")
     counts = dict(duckdb.sql(f"select harness, count(*) from '{dest}' group by 1").fetchall())
     # Codex's session is gone from disk but kept; the others are replaced, not doubled.
-    assert counts == {"claude-code": 8, "codex": 4, "pi": 3, "omp": 4, "hermes": 4}
+    assert counts == {"claude-code": 11, "codex": 5, "pi": 3, "omp": 4, "hermes": 5}
+
+
+def test_estimates_survive_pruning_of_reporting_session(home, tmp_path):
+    data = tmp_path / "data"
+    ingest.run(data, "m1")
+    # A (with the cost-state) is pruned; B is still on disk and re-ingested.
+    (home / ".claude/projects/-work-demo/A.jsonl").unlink()
+    shutil.rmtree(home / ".claude/transcripts")
+    dest = ingest.run(data, "m1")
+    # A's stored calls calibrate the rate; 1h cache writes weigh as 5m ones
+    # there (msg_1: 297.5 - 20*(2 - 1.25) = 282.5).
+    got = duckdb.sql(f"select cost_usd, cost_source from '{dest}' where session_id = 'B'").fetchall()
+    assert got == [(pytest.approx(150 * 0.5 / 296.5), "estimated")]
 
 
 def test_registry_paths(tmp_path, monkeypatch):
