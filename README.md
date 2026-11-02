@@ -13,6 +13,7 @@ Skills, tool calls and model usage across local coding agents, in one table and 
 uv tool install git+https://github.com/acramatte/agent-usage   # or: uv tool install .
 agent-usage agents      # which agents are on this machine, session files, ingested yes/no
 agent-usage ingest      # transcripts -> events-<machine>.parquet (+ skills-<machine>.json)
+agent-usage ingest --amp   # Amp threads from ampcode.com -> events-ampcode.parquet
 agent-usage dashboard   # -> dashboard.html (self-contained) and open it
 agent-usage sync --repo <user>/<dataset>   # optional, needs 'agent-usage[sync]'
 ```
@@ -28,7 +29,8 @@ Agents are discovered from a vendored copy of
 `scripts/update-registry`). Its store paths drive the adapters too, so env
 overrides (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, ...) and profiles
 (`~/.hermes/profiles/*`, `~/.omp/profiles/*`) are read. Only the five harnesses
-below have usage adapters; `agents` lists the rest as found/not found.
+below have usage adapters; `agents` lists the rest as found/not found. Amp is read
+from its server instead (below).
 
 ## Sources
 
@@ -41,6 +43,30 @@ below have usage adapters; `agents` lists the rest as found/not found.
 | Hermes | `~/.hermes/state.db`, `~/.hermes/profiles/*/state.db` (read-only) | `session_model_usage` (per session × model × task) | actual, else estimated | `messages.tool_calls` | `skill_view` |
 
 Hermes is read from its local database rather than Langfuse: same data, no API keys.
+
+### Amp
+
+Amp keeps threads on ampcode.com (orbs leave nothing on disk), so `agent-usage ingest --amp`
+reads them with the `amp` CLI (`amp login` first): `amp threads list`, then for each thread
+new or updated since the last run `amp threads export` (messages) and
+`amp threads usage --details` (cost and per-model totals). It writes
+`events-ampcode.parquet`, the same for every machine: run it on one, and `sync` shares it.
+
+- Model calls: one per assistant message. Requests the export does not show (Task, finder,
+  oracle, titles, compaction) are one `detail = 'subagent'` row per model, from the usage
+  report minus the messages.
+- Cost: per model, Amp's charge plus the list-price estimate for your own provider keys or
+  subscriptions, split by price weight; `estimated` when any of it is list price. Orb
+  runtime and web search credits are not model calls and are not counted.
+- Tools: `tool_use` / `tool_result`, errors from the run status; duration is up to the
+  message carrying the turn's results, an upper bound when tools ran in parallel.
+- Skills: the `skill` tool.
+- The usage report is limited to 60 threads an hour. Threads over the limit are ingested
+  without cost and retried on the next run, so a first backfill takes one run per 60 threads.
+- Each thread's model calls are checked against the report's token totals; a mismatch, or a
+  usage report or export in an unexpected shape, prints a warning with the thread ID to stderr.
+  Unreadable threads are skipped and retried next run. Threads are only re-read when they
+  change, so after a parser fix delete `amp-threads.json` in the data dir to re-read them all.
 
 ## Schema (`events-*.parquet`)
 
@@ -63,6 +89,7 @@ uv tool install 'agent-usage[sync] @ git+https://github.com/acramatte/agent-usag
 hf auth login                              # once per machine, write token
 export AGENT_USAGE_HF_REPO=<user>/<dataset>   # or pass --repo
 agent-usage ingest && agent-usage sync && agent-usage dashboard   # on each machine
+agent-usage ingest --amp   # before sync, on one machine only
 ```
 
 `sync` uploads this machine's `events-`/`skills-` files (creating the dataset,
@@ -70,6 +97,9 @@ private, if missing) and downloads every other machine's. It never overwrites th
 machine's local files with the pushed copies, which can only be older; if they are
 missing (a reinstall under the same hostname) it restores them, so the next
 `ingest` keeps the sessions pruned since.
+
+The machine that runs `ingest --amp` treats `events-ampcode.parquet` as its own: it
+pushes it and never pulls it; the others pull it like any other machine's.
 
 `sync` refuses a dataset that is public; pass `--allow-public` to override.
 

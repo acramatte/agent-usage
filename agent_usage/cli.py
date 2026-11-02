@@ -37,9 +37,9 @@ def agents(args):
 
 
 def ingest(args):
-    from .ingest import run
+    from .ingest import run, run_amp
 
-    run(args.data_dir, args.machine)
+    (run_amp if args.amp else run)(args.data_dir, args.machine)
 
 
 def dashboard(args):
@@ -57,8 +57,15 @@ def machine_name(s):
     return s
 
 
-def own_files(machine):
-    return [f"events-{machine}.parquet", f"skills-{machine}.json"]
+AMP = "ampcode"
+
+
+def own_files(machine, data_dir):
+    """This machine's files, and Amp's on the machine that runs `ingest --amp`
+    (it keeps amp-threads.json), so that one pushes them and never pulls them."""
+    machines = [machine] + ([AMP] if (data_dir / "amp-threads.json").exists() else [])
+    return [f"{kind}-{m}.{ext}" for m in machines
+            for kind, ext in (("events", "parquet"), ("skills", "json"))]
 
 
 SHARED = re.compile(r"(events-[^/]+\.parquet|skills-[^/]+\.json)")
@@ -68,7 +75,7 @@ def to_pull(remote, machine, data_dir):
     """Dataset files to download: every other machine's, and this machine's own
     only when missing here (a reinstall). An existing local copy is never older
     than the pushed one, and replacing it would lose sessions since pruned."""
-    own = set(own_files(machine))
+    own = set(own_files(machine, data_dir))
     return [f for f in remote
             if SHARED.fullmatch(f) and not (f in own and (data_dir / f).exists())]
 
@@ -86,7 +93,8 @@ def sync(args):
     if not api.repo_info(args.repo, repo_type="dataset").private and not args.allow_public:
         raise SystemExit(f"{args.repo} is public; refusing to sync (pass --allow-public to override)")
     # Push only this machine's files: other machines' copies here may be stale.
-    paths = [args.data_dir / n for n in own_files(args.machine) if (args.data_dir / n).exists()]
+    paths = [args.data_dir / n for n in own_files(args.machine, args.data_dir)
+             if (args.data_dir / n).exists()]
     if not paths:
         print(f"nothing to push for {args.machine} in {args.data_dir} (run ingest first)")
     for p in paths:
@@ -105,7 +113,8 @@ def main(argv=None):
                         help="where events-*.parquet live (default: $AGENT_USAGE_DATA "
                              "or $XDG_DATA_HOME/agent-usage)")
     machine = argparse.ArgumentParser(add_help=False)
-    machine.add_argument("--machine", type=machine_name, default=socket.gethostname().split(".")[0])
+    machine.add_argument("--machine", type=machine_name,
+                         help=f"default: this host's name ('{AMP}' for ingest --amp)")
 
     ap = argparse.ArgumentParser(prog="agent-usage", description=__doc__)
     sub = ap.add_subparsers(required=True, metavar="command")
@@ -114,6 +123,8 @@ def main(argv=None):
     p.set_defaults(fn=agents)
     p = sub.add_parser("ingest", parents=[common, machine],
                        help="transcripts -> events-<machine>.parquet")
+    p.add_argument("--amp", action="store_true",
+                   help=f"Amp threads from ampcode.com (needs the amp CLI) -> events-{AMP}.parquet")
     p.set_defaults(fn=ingest)
     p = sub.add_parser("dashboard", parents=[common], help="build the HTML page and open it")
     p.add_argument("--out", type=Path, help="default: <data dir>/dashboard.html")
@@ -127,6 +138,8 @@ def main(argv=None):
                    help="sync even if the dataset already exists and is public")
     p.set_defaults(fn=sync)
     args = ap.parse_args(argv)
+    if "machine" in args and not args.machine:
+        args.machine = AMP if getattr(args, "amp", False) else socket.gethostname().split(".")[0]
     args.fn(args)
 
 

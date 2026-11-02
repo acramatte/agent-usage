@@ -482,24 +482,45 @@ def lit(s):
 
 
 def run(data_dir, machine):
-    data = Path(data_dir)
-    dest = data / f"events-{machine}.parquet"
-    con = duckdb.connect()
+    dest = Path(data_dir) / f"events-{machine}.parquet"
     prior = {}
     if dest.exists():
         # Reported Claude Code costs of earlier ingests keep calibrating the
         # estimates once their transcripts are pruned. 1h cache writes are not
         # stored apart, so they weigh as 5m ones here.
-        prior = {(s, m): (c, u) for s, m, c, u in con.sql(f"""
+        prior = {(s, m): (c, u) for s, m, c, u in duckdb.sql(f"""
             select session_id, name, sum(cost_usd),
                    sum(input_tokens * {W_IN} + output_tokens * {W_OUT} + cache_read * {W_CR}
                        + cache_write * {W_CW5})::double
             from {lit(dest)} where harness = 'claude-code' and event_type = 'model_call'
               and cost_source = 'reported' group by 1, 2""").fetchall()}
     rows, inv = collect(prior)
+    dest = write(data_dir, machine, rows)
+    (Path(data_dir) / f"skills-{machine}.json").write_text(json.dumps(inv, indent=2))
+    return dest
+
+
+def run_amp(data_dir, machine):
+    from . import amp
+
+    dest = Path(data_dir) / f"events-{machine}.parquet"
+    known = set()
+    if dest.exists():
+        known = {r[0] for r in duckdb.sql(f"select distinct session_id from {lit(dest)}").fetchall()}
+    rows, save = amp.collect(data_dir, known)
+    dest = write(data_dir, machine, rows)
+    save()
+    return dest
+
+
+def write(data_dir, machine, rows):
+    """Merge fresh rows into <data dir>/events-<machine>.parquet."""
     for r in rows:
         r["machine"] = machine
 
+    data = Path(data_dir)
+    dest = data / f"events-{machine}.parquet"
+    con = duckdb.connect()
     data.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".ndjson", delete=False) as tmp:
         for r in rows:
@@ -531,7 +552,6 @@ def run(data_dir, machine):
         os.unlink(tmp.name)
         if os.path.exists(staged):
             os.unlink(staged)
-    (data / f"skills-{machine}.json").write_text(json.dumps(inv, indent=2))
     total = con.sql(f"select count(*) from {lit(dest)}").fetchall()[0][0]
     print(f"wrote {dest} ({len(rows)} fresh, {total} total events)")
     return dest
