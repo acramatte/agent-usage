@@ -14,7 +14,7 @@ uv tool install git+https://github.com/acramatte/agent-usage   # or: uv tool ins
 agent-usage agents      # which agents are on this machine, session files, ingested yes/no
 agent-usage ingest      # transcripts -> events-<machine>.parquet (+ skills-<machine>.json)
 agent-usage dashboard   # -> dashboard.html (self-contained) and open it
-agent-usage push --repo <user>/<dataset>   # optional, needs 'agent-usage[push]'
+agent-usage sync --repo <user>/<dataset>   # optional, needs 'agent-usage[sync]'
 ```
 
 Data lives in `$AGENT_USAGE_DATA`, else `$XDG_DATA_HOME/agent-usage`
@@ -59,14 +59,19 @@ one in the data dir. To share them through a private
 [Hugging Face dataset](https://huggingface.co/docs/hub/datasets):
 
 ```sh
+uv tool install 'agent-usage[sync] @ git+https://github.com/acramatte/agent-usage'
 hf auth login                              # once per machine, write token
-agent-usage push --repo <user>/<dataset>   # on each machine; creates the dataset if missing
-hf download <user>/<dataset> --repo-type dataset --local-dir ~/.local/share/agent-usage
-agent-usage dashboard
+export AGENT_USAGE_HF_REPO=<user>/<dataset>   # or pass --repo
+agent-usage ingest && agent-usage sync && agent-usage dashboard   # on each machine
 ```
 
-`push` refuses to upload to a dataset that is public (a new one is created private);
-pass `--allow-public` to override.
+`sync` uploads this machine's `events-`/`skills-` files (creating the dataset,
+private, if missing) and downloads every other machine's. It never overwrites this
+machine's local files with the pushed copies, which can only be older; if they are
+missing (a reinstall under the same hostname) it restores them, so the next
+`ingest` keeps the sessions pruned since.
+
+`sync` refuses a dataset that is public; pass `--allow-public` to override.
 
 ## Development
 

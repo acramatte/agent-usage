@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import socket
 import webbrowser
 from pathlib import Path
@@ -49,27 +50,46 @@ def dashboard(args):
         webbrowser.open(out.resolve().as_uri())
 
 
-def push(args):
+def own_files(machine):
+    return [f"events-{machine}.parquet", f"skills-{machine}.json"]
+
+
+SHARED = re.compile(r"(events-[^/]+\.parquet|skills-[^/]+\.json)")
+
+
+def to_pull(remote, machine, data_dir):
+    """Dataset files to download: every other machine's, and this machine's own
+    only when missing here (a reinstall). An existing local copy is never older
+    than the pushed one, and replacing it would lose sessions since pruned."""
+    own = set(own_files(machine))
+    return [f for f in remote
+            if SHARED.fullmatch(f) and not (f in own and (data_dir / f).exists())]
+
+
+def sync(args):
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, hf_hub_download
     except ImportError:
-        raise SystemExit("push needs huggingface_hub: uv tool install 'agent-usage[push]'")
+        raise SystemExit("sync needs huggingface_hub: uv tool install 'agent-usage[sync]'")
     if not args.repo:
-        raise SystemExit("push needs --repo <user/dataset> or AGENT_USAGE_HF_REPO")
-    # Only this machine's files: other machines' copies here may be stale.
-    names = [f"events-{args.machine}.parquet", f"skills-{args.machine}.json"]
-    paths = [args.data_dir / n for n in names if (args.data_dir / n).exists()]
-    if not paths:
-        raise SystemExit(f"nothing to push for {args.machine} in {args.data_dir}")
+        raise SystemExit("sync needs --repo <user/dataset> or AGENT_USAGE_HF_REPO")
     api = HfApi()
     api.create_repo(args.repo, repo_type="dataset", private=True, exist_ok=True)
     # private=True only applies when the dataset is new; an existing one keeps its visibility.
     if not api.repo_info(args.repo, repo_type="dataset").private and not args.allow_public:
-        raise SystemExit(f"{args.repo} is public; refusing to push (pass --allow-public to override)")
+        raise SystemExit(f"{args.repo} is public; refusing to sync (pass --allow-public to override)")
+    # Push only this machine's files: other machines' copies here may be stale.
+    paths = [args.data_dir / n for n in own_files(args.machine) if (args.data_dir / n).exists()]
+    if not paths:
+        print(f"nothing to push for {args.machine} in {args.data_dir} (run ingest first)")
     for p in paths:
         api.upload_file(path_or_fileobj=p, path_in_repo=p.name, repo_id=args.repo,
                         repo_type="dataset", commit_message=f"agent-usage: {p.name}")
         print(f"pushed {p.name} to {args.repo}")
+    remote = api.list_repo_files(args.repo, repo_type="dataset")
+    for f in to_pull(remote, args.machine, args.data_dir):
+        hf_hub_download(args.repo, f, repo_type="dataset", local_dir=args.data_dir)
+        print(f"pulled {f} from {args.repo}")
 
 
 def main(argv=None):
@@ -92,12 +112,13 @@ def main(argv=None):
     p.add_argument("--out", type=Path, help="default: <data dir>/dashboard.html")
     p.add_argument("--no-open", action="store_true")
     p.set_defaults(fn=dashboard)
-    p = sub.add_parser("push", parents=[common, machine],
-                       help="upload this machine's parquet to a Hugging Face dataset")
+    p = sub.add_parser("sync", parents=[common, machine],
+                       help="push this machine's parquet to a Hugging Face dataset, "
+                            "pull the other machines'")
     p.add_argument("--repo", default=os.environ.get("AGENT_USAGE_HF_REPO"))
     p.add_argument("--allow-public", action="store_true",
-                   help="push even if the dataset already exists and is public")
-    p.set_defaults(fn=push)
+                   help="sync even if the dataset already exists and is public")
+    p.set_defaults(fn=sync)
     args = ap.parse_args(argv)
     args.fn(args)
 

@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = ["duckdb>=1.1"]
 
 [project.optional-dependencies]
-push = ["huggingface_hub>=0.25"]
+sync = ["huggingface_hub>=0.25"]
 
 [project.scripts]
 agent-usage = "agent_usage.cli:main"

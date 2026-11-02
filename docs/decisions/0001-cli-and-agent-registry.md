@@ -19,6 +19,8 @@ Implementation notes:
 - Refactor check: `main`'s scripts and the CLI produce identical rows on the
   fixture home. On a real machine: ingest with both into separate data dirs and
   run `scripts/compare-events`; differences should be limited to the new roots.
+- `push` became `sync` (push this machine's files, pull the others', never
+  overwrite this machine's local copy); the extra is `agent-usage[sync]`.
 
 This is a handoff. It is written so an agent that has not seen the original
 conversation can pick the work up from here.
