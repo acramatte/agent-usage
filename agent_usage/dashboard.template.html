@@ -151,7 +151,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 // Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations]
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [] }));
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2] }));
-const state = { days: 0, h: "", m: "", allTools: false };
+const state = { days: 0, h: "", m: "", all: { tools: false, skills: false } };
 
 function fillSelect(id, values) {
   const s = $(id); s.append(el("option", { value: "" }, "All"));
@@ -343,7 +343,7 @@ function models(rows) {
 }
 
 function tools(rows) {
-  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = state.allTools ? all : all.slice(0, 15);
+  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = state.all.tools ? all : all.slice(0, 15);
   const max = Math.max(1, ...g.map(a => a.n));
   table("tools", ["Tool", "Calls", "", "Errors", "p50", "p95"],
     g.map(a => {
@@ -352,23 +352,28 @@ function tools(rows) {
         er, dur(q(a.du, .5)), dur(q(a.du, .95))];
     }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, a.n ? a.e / a.n : null, q(a.du, .5), q(a.du, .95)]) });
   $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
-  if (all.length > 15) {
-    const p = el("p", { class: "note" }, state.allTools ? `Showing all ${all.length} tools. ` : `Showing the ${g.length} most-called of ${all.length} tools. `);
-    const b = el("button", { type: "button" }, state.allTools ? "Show top 15" : "Show all");
-    b.onclick = () => { state.allTools = !state.allTools; render(); $("tools").querySelector(".note button").focus(); };
-    p.append(b); $("tools").append(p);
-  }
+  showAll("tools", all.length, 15, "most-called");
+}
+
+// "Showing the <cap> <verb> of <total> <id>." with a button that lifts the cap.
+function showAll(id, total, cap, verb) {
+  if (total <= cap) return;
+  const on = state.all[id];
+  const p = el("p", { class: "note" }, on ? `Showing all ${total} ${id}. ` : `Showing the ${cap} ${verb} of ${total} ${id}. `);
+  const b = el("button", { type: "button" }, on ? `Show top ${cap}` : "Show all");
+  b.onclick = () => { state.all[id] = !on; render(); $(id).querySelector(".note button").focus(); };
+  p.append(b); $(id).append(p);
 }
 
 function skills(rows) {
   const sk = group(rows, "skill").sort((a, b) => b.n - a.n);
   const cmd = group(rows, "command").sort((a, b) => b.n - a.n);
-  const max = Math.max(1, ...sk.map(a => a.n));
+  const g = state.all.skills ? sk : sk.slice(0, 20), max = Math.max(1, ...g.map(a => a.n));
   table("skills", ["Skill", "Loads", ""],
-    sk.slice(0, 20).map(a => [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Loads", fmt(a.n)]])]),
-    { left: [0, 2], keys: sk.slice(0, 20).map(a => [a.k, a.n, undefined]) });
+    g.map(a => [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Loads", fmt(a.n)]])]),
+    { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined]) });
   $("skills").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
-  if (sk.length > 20) $("skills").append(el("p", { class: "note" }, `Showing the 20 most-loaded of ${sk.length} skills.`));
+  showAll("skills", sk.length, 20, "most-loaded");
   if (cmd.length) {
     const p = el("p", { class: "note" }, "Other slash commands: " + cmd.map(a => `/${a.k} ×${a.n}`).join(", "));
     $("skills").append(p);
