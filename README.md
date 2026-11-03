@@ -2,6 +2,9 @@
 
 Skills, tool calls and model usage across local coding agents, in one table and one page.
 
+Using several agents and models across machines, but no overall view of which tools,
+skills and models they actually use? This project tries to fix that.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.png">
   <img alt="agent-usage dashboard: spend, model call, tool call, skill and session totals; weekly model calls stacked by harness; per-model tokens, cache hits and spend; top tools with error rate and p50/p95 duration; skill loads and installed-but-unused skills" src="docs/screenshots/dashboard-light.png">
