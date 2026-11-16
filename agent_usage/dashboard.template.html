@@ -73,6 +73,18 @@ td .key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; ma
 .stack span { height: 100%; }
 .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .head .seg button { padding: 3px 10px; font-size: 12px; }
+.head .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.search { position: relative; display: inline-flex; align-items: center; }
+.search input { font: inherit; font-size: 12px; width: 180px; padding: 3px 24px 3px 8px; border-radius: 8px;
+  border: 1px solid var(--grid); background: var(--surface-1); color: var(--text-primary); }
+.search input::placeholder { color: var(--text-muted); }
+.search input::-webkit-search-cancel-button { display: none; }
+.search input:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 1px; }
+.search button { all: unset; position: absolute; right: 4px; width: 16px; height: 16px; line-height: 16px; text-align: center;
+  border-radius: 50%; cursor: pointer; color: var(--text-muted); font-size: 14px; }
+.search button:hover { color: var(--text-primary); background: var(--hover); }
+.search button:focus-visible { outline: 2px solid var(--text-secondary); }
+.search button[hidden] { display: none; }
 .muted { color: var(--text-muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--grid); color: var(--text-secondary); }
@@ -118,8 +130,14 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
   <section class="card">
     <div class="head">
       <h2>Models</h2>
-      <div class="seg" id="modelsBy" role="group" aria-label="Group models">
-        <button data-by="" aria-pressed="true">By model</button><button data-by="h">By harness</button>
+      <div class="actions">
+        <span class="search">
+          <input type="search" data-q="models" placeholder="Search models" aria-label="Search models" autocomplete="off" spellcheck="false">
+          <button type="button" aria-label="Clear search" title="Clear search" hidden>×</button>
+        </span>
+        <div class="seg" id="modelsBy" role="group" aria-label="Group models">
+          <button data-by="" aria-pressed="true">By model</button><button data-by="h">By harness</button>
+        </div>
       </div>
     </div>
     <p class="sub" id="modelsSub"></p>
@@ -130,12 +148,24 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
 
   <div class="grid2">
     <section class="card">
-      <h2>Tool calls</h2>
+      <div class="head">
+        <h2>Tool calls</h2>
+        <span class="search">
+          <input type="search" data-q="tools" placeholder="Search tools" aria-label="Search tools" autocomplete="off" spellcheck="false">
+          <button type="button" aria-label="Clear search" title="Clear search" hidden>×</button>
+        </span>
+      </div>
       <p class="sub">Most-called tools. Errors and duration count calls that got a result; No result is calls cut off before one.</p>
       <div class="scroll" id="tools"></div>
     </section>
     <section class="card">
-      <h2>Skills</h2>
+      <div class="head">
+        <h2>Skills</h2>
+        <span class="search">
+          <input type="search" data-q="skills" placeholder="Search skills" aria-label="Search skills" autocomplete="off" spellcheck="false">
+          <button type="button" aria-label="Clear search" title="Clear search" hidden>×</button>
+        </span>
+      </div>
       <p class="sub">Skill loads by the model, plus skills you ran as slash commands.</p>
       <div class="scroll" id="skills"></div>
       <h2 style="margin-top:16px">Installed but unused in this range</h2>
@@ -161,7 +191,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [], nr: r[14] || 0 }));
 // Session: [day it was active, machine, harness, session number]
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2], id: s[3] }));
-const state = { days: 0, h: "", m: "", modelsBy: "", all: { tools: false, skills: false } };
+const state = { days: 0, h: "", m: "", modelsBy: "", q: { models: "", tools: "", skills: "" }, all: { tools: false, skills: false } };
 
 function fillSelect(id, values) {
   const s = $(id); s.append(el("option", { value: "" }, "All"));
@@ -175,6 +205,20 @@ for (const b of $("range").querySelectorAll("button")) b.onclick = () => {
   state.days = +b.dataset.d; render();
 };
 for (const b of $("modelsBy").querySelectorAll("button")) b.onclick = () => { state.modelsBy = b.dataset.by; render(); };
+// Search boxes: state.q[<table id>] filters that table's rows by name; Esc or × clears it.
+for (const box of document.querySelectorAll(".search")) {
+  const input = box.querySelector("input"), clear = box.querySelector("button"), id = input.dataset.q;
+  const set = v => { state.q[id] = v; input.value = v; clear.hidden = !v; render(); };
+  input.oninput = () => set(input.value);
+  input.onkeydown = e => { if (e.key === "Escape" && input.value) { e.preventDefault(); set(""); } };
+  clear.onclick = () => { set(""); input.focus(); };
+}
+// Rows whose text contains every word of the table's search, ignoring case.
+function search(id, rows, text) {
+  const words = state.q[id].toLowerCase().split(/\s+/).filter(Boolean);
+  return words.length ? rows.filter(a => words.every(w => text(a).toLowerCase().includes(w))) : rows;
+}
+const noMatch = (id, all, hits) => all.length && !hits.length ? `No ${id} match “${state.q[id].trim()}”` : null;
 const days = [...new Set(R.map(r => r.day))].sort();
 $("meta").textContent = `${days.length ? `${days[0]} → ${days.at(-1)}` : "No events"} · ${new Set(R.map(r => r.m)).size} machine(s) · built ${DATA.built.replace("T", " ")}`;
 
@@ -319,7 +363,7 @@ function table(id, head, body, opts = {}) {
     });
     tb.append(r);
   }
-  $(id).replaceChildren(body.length ? t : el("div", { class: "empty" }, "Nothing in this range"));
+  $(id).replaceChildren(body.length ? t : el("div", { class: "empty" }, opts.empty || "Nothing in this range"));
 }
 const keyed = (h, text) => { const s = el("span"); const k = el("span", { class: "key" }); k.style.background = col(h); s.append(k, document.createTextNode(text)); return s; };
 const bar = (h, frac, tipHead, tipRows) => {
@@ -362,7 +406,10 @@ function models(rows) {
     for (const s of g) s.parts.sort((x, y) => HARNESSES.indexOf(x.h) - HARNESSES.indexOf(y.h));
   }
   g.sort((a, b) => b.tok - a.tok);
+  // Bars keep the unfiltered scale, so a search does not stretch them.
   const max = Math.max(1, ...g.map(a => a.tok));
+  const unfiltered = g;
+  g = search("models", g, a => a.k + (byH ? " " + a.h : ""));
   const noSpend = a => a.parts.every(p => p.h === "codex");  // Codex reports no cost
   table("models", ["Model", "Calls", "Input", "Output", "Cache read", "Cache hit", "Spend", "Tokens"],
     g.map(a => {
@@ -379,7 +426,7 @@ function models(rows) {
         for (const p of a.parts) { const s = el("span"); s.style.flex = `${p.tok} 0 0`; s.style.background = col(p.h); b.append(s); }
       }
       return [name, fmt(a.n), fmt(a.i), fmt(a.o), fmt(a.cr), inTot ? pct(a.cr / inTot) : "—", spend, b];
-    }), { left: [0], keys: g.map(a => {
+    }), { left: [0], empty: noMatch("models", unfiltered, g), keys: g.map(a => {
       const inTot = a.i + a.cr + a.cw;
       return [a.k, a.n, a.i, a.o, a.cr, inTot ? a.cr / inTot : null, noSpend(a) ? null : a.c, a.tok];
     }) });
@@ -387,8 +434,9 @@ function models(rows) {
 }
 
 function tools(rows) {
-  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = state.all.tools ? all : all.slice(0, 15);
-  const max = Math.max(1, ...g.map(a => a.n));
+  // Search covers every tool, not only the top 15; bars keep the unfiltered scale.
+  const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), hits = search("tools", all, a => a.k);
+  const g = state.all.tools ? hits : hits.slice(0, 15), max = Math.max(1, ...all.map(a => a.n));
   // Errors are a share of the calls that got a result; calls cut off before theirs are counted apart.
   const rate = a => a.n > a.nr ? a.e / (a.n - a.nr) : null;
   table("tools", ["Tool", "Calls", "", "Errors", "No result", "p50", "p95"],
@@ -396,9 +444,9 @@ function tools(rows) {
       const er = el("span", rate(a) >= 0.1 ? { class: "err" } : {}, rate(a) == null ? "—" : pct(rate(a)));
       return [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Calls", fmt(a.n)], [null, "Errors", fmt(a.e)], [null, "No result", fmt(a.nr)]]),
         er, a.nr ? fmt(a.nr) : "—", dur(q(a.du, .5)), dur(q(a.du, .95))];
-    }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, rate(a), a.nr, q(a.du, .5), q(a.du, .95)]) });
+    }), { left: [0, 2], empty: noMatch("tools", all, hits), keys: g.map(a => [a.k, a.n, undefined, rate(a), a.nr, q(a.du, .5), q(a.du, .95)]) });
   $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
-  showAll("tools", all.length, 15, "most-called");
+  showAll("tools", hits.length, 15, "most-called");
 }
 
 // "Showing the <cap> <verb> of <total> <id>." with a button that lifts the cap.
@@ -414,12 +462,13 @@ function showAll(id, total, cap, verb) {
 function skills(rows) {
   const sk = group(rows, "skill").sort((a, b) => b.n - a.n);
   const cmd = group(rows, "command").sort((a, b) => b.n - a.n);
-  const g = state.all.skills ? sk : sk.slice(0, 20), max = Math.max(1, ...g.map(a => a.n));
+  const hits = search("skills", sk, a => a.k);
+  const g = state.all.skills ? hits : hits.slice(0, 20), max = Math.max(1, ...sk.map(a => a.n));
   table("skills", ["Skill", "Loads", ""],
     g.map(a => [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Loads", fmt(a.n)]])]),
-    { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined]) });
+    { left: [0, 2], empty: noMatch("skills", sk, hits), keys: g.map(a => [a.k, a.n, undefined]) });
   $("skills").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
-  showAll("skills", sk.length, 20, "most-loaded");
+  showAll("skills", hits.length, 20, "most-loaded");
   if (cmd.length) {
     const p = el("p", { class: "note" }, "Other slash commands: " + cmd.map(a => `/${a.k} ×${a.n}`).join(", "));
     $("skills").append(p);
