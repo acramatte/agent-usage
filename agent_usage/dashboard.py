@@ -24,7 +24,9 @@ def build(data_dir, out):
                round(coalesce(sum(cost_usd) filter (where cost_source = 'estimated'), 0), 6),
                count(*) filter (where is_error)::int,
                case when event_type = 'tool_call'
-                    then list(round(duration_ms)::int) filter (where duration_ms is not null) end
+                    then list(round(duration_ms)::int) filter (where duration_ms is not null) end,
+               -- tool calls whose transcript ended before their result
+               count(*) filter (where event_type = 'tool_call' and is_error is null)::int
         from {events}
         group by 1, 2, 3, 4, 5 order by 1
     """).fetchall()

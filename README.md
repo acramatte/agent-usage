@@ -76,7 +76,8 @@ new or updated since the last run `amp threads export` (messages) and
 One row per event: `ts, machine, harness, session_id, project, event_type`
 (`model_call | tool_call | skill | command`), `name` (model / tool / skill), `detail`,
 `n` (call count; >1 only for Hermes aggregates; a Claude Code background-model total counts as 1), token columns, `cost_usd`, `cost_source`
-(`reported | estimated`), `duration_ms`, `is_error`, `is_subagent`.
+(`reported | estimated`), `duration_ms`, `is_error` (null for a tool call whose transcript ended
+before its result), `is_subagent`.
 
 Re-running `ingest` replaces sessions still on disk and keeps the ones a harness has
 since pruned (Claude Code deletes transcripts after ~30 days), so run it regularly.

@@ -57,6 +57,41 @@ def ev(**kw):
     return base
 
 
+class ToolCalls:
+    """Tool calls by id: issued, then ok or error at their first result, or no
+    result (is_error None) when the transcript ends first. A call or result
+    repeated under the same id counts once, the first time."""
+
+    def __init__(self):
+        self.calls, self.started = {}, {}
+
+    def issue(self, cid, e):
+        """Track e as call cid; False when cid was issued before (e is dropped)."""
+        if cid is None:
+            cid = object()  # cannot be matched to a result, but still counts
+        if cid in self.calls:
+            return False
+        self.calls[cid] = e
+        return True
+
+    def start(self, cid, ts):
+        """When the call began running, if the harness logs it apart from the call."""
+        self.started.setdefault(cid, ts)
+
+    def result(self, cid, is_error, end_ts=None, duration_ms=None):
+        """The call's first result; duration_ms, else the time from start to end_ts."""
+        e = self.calls.get(cid)
+        if e is None or e["is_error"] is not None:
+            return
+        e["is_error"] = bool(is_error)
+        if duration_ms is None and end_ts is not None:
+            duration_ms = elapsed_ms(self.started.get(cid) or e["ts"], end_ts)
+        e["duration_ms"] = duration_ms
+
+    def events(self):
+        return list(self.calls.values())
+
+
 def jsonl(path):
     with open(path, errors="replace") as f:
         for line in f:
@@ -102,7 +137,7 @@ def claude_code(files, skill_names=(), prior_rates=None):
     # Keyed across files: a session copied into a second store path (or a
     # resumed transcript repeating earlier lines) must not count twice.
     calls = {}  # message.id -> event (usage repeats per content block; keep last)
-    tools = {}  # tool_use id -> event
+    tools = ToolCalls()
     seen = set()  # line uuids
     for f in files:
         sub = "/subagents/" in f
@@ -135,10 +170,9 @@ def claude_code(files, skill_names=(), prior_rates=None):
                         reasoning_tokens=(u.get("output_tokens_details") or {}).get("thinking_tokens", 0),
                         _cw1h=cc.get("ephemeral_1h_input_tokens", 0))
                 for b in blocks:
-                    if b.get("type") != "tool_use" or b.get("id") in tools:
+                    if b.get("type") != "tool_use" or not tools.issue(
+                            b.get("id"), ev(**common, event_type="tool_call", name=b.get("name"))):
                         continue
-                    e = ev(**common, event_type="tool_call", name=b.get("name"))
-                    tools[b.get("id")] = e
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     if b.get("name") == "Skill" and inp.get("skill"):
                         out.append(ev(**common, event_type="skill", name=skill_name(inp["skill"]), detail="model"))
@@ -152,17 +186,12 @@ def claude_code(files, skill_names=(), prior_rates=None):
                                       name=skill_name(name) if kind == "skill" else name, detail="user"))
                 else:
                     r = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
+                    dur = (r["durationMs"] if "durationMs" in r
+                           else r["durationSeconds"] * 1000 if "durationSeconds" in r else None)
                     for b in blocks:
-                        if b.get("type") == "tool_result" and b.get("tool_use_id") in tools:
-                            e = tools[b["tool_use_id"]]
-                            e["is_error"] = bool(b.get("is_error"))
-                            if "durationMs" in r:
-                                e["duration_ms"] = r["durationMs"]
-                            elif "durationSeconds" in r:
-                                e["duration_ms"] = r["durationSeconds"] * 1000
-                            else:
-                                e["duration_ms"] = elapsed_ms(e["ts"], d.get("timestamp"))
-    out += tools.values()
+                        if b.get("type") == "tool_result":
+                            tools.result(b.get("tool_use_id"), b.get("is_error"), d.get("timestamp"), dur)
+    out += tools.events()
 
     # Cost: split each session's reported per-model cost across its calls by
     # price weight; calibrate a $/unit rate per model for sessions without one.
@@ -231,7 +260,7 @@ def codex(files):
         # deltas start from zero. Totals (not last_token_usage) make repeated
         # token_count events count once.
         prev_total = {}
-        tools = {}
+        tools = ToolCalls()
         for d in jsonl(f):
             p = d.get("payload") if isinstance(d.get("payload"), dict) else {}
             t, pt = d.get("type"), p.get("type")
@@ -256,8 +285,8 @@ def codex(files):
                 if tot:
                     prev_total = tot
             elif t == "response_item" and pt in ("function_call", "custom_tool_call"):
-                e = ev(**common, event_type="tool_call", name=p.get("name"))
-                tools[p.get("call_id")] = e
+                if not tools.issue(p.get("call_id"), ev(**common, event_type="tool_call", name=p.get("name"))):
+                    continue
                 args = p.get("arguments") or p.get("input")
                 # Codex reads files through its shell tools; apply_patch writes them.
                 skill = p.get("name") != "apply_patch" and skill_from_text(
@@ -265,15 +294,12 @@ def codex(files):
                 if skill:
                     out.append(ev(**common, event_type="skill", name=skill, detail="read"))
             elif t == "response_item" and pt in ("function_call_output", "custom_tool_call_output"):
-                e = tools.get(p.get("call_id"))
                 o = p.get("output") if isinstance(p.get("output"), str) else json.dumps(p.get("output"))
-                if e:
-                    m = re.search(r"(?:exited with code|Exit code:) (\d+)", o)
-                    e["is_error"] = bool(m and m.group(1) != "0")
-                    m = re.search(r"Wall time: ([\d.]+) seconds", o)
-                    if m:
-                        e["duration_ms"] = float(m.group(1)) * 1000
-        out += tools.values()
+                code = re.search(r"(?:exited with code|Exit code:) (\d+)", o)
+                wall = re.search(r"Wall time: ([\d.]+) seconds", o)
+                tools.result(p.get("call_id"), code and code.group(1) != "0",
+                             duration_ms=float(wall.group(1)) * 1000 if wall else None)
+        out += tools.events()
     return out
 
 
@@ -289,7 +315,7 @@ def pi_like(harness, files):
     for f in files:
         sid = cwd = None
         sub = False
-        tools, started = {}, {}
+        tools = ToolCalls()
         for d in jsonl(f):
             t = d.get("type")
             if t == "session":
@@ -311,15 +337,14 @@ def pi_like(harness, files):
                 out.append(usage_event(d.get("model"), d["usage"], d.get("purpose")))
             elif t == "custom" and d.get("customType") == "tool_execution_start":
                 data = d.get("data") or {}
-                started[data.get("toolCallId")] = data.get("startedAt")
+                tools.start(data.get("toolCallId"), data.get("startedAt"))
             elif m.get("role") == "assistant":
                 if m.get("usage"):
                     out.append(usage_event(m.get("model"), m["usage"]))
                 content = m.get("content")
                 for b in content if isinstance(content, list) else []:
-                    if isinstance(b, dict) and b.get("type") == "toolCall":
-                        e = ev(**common, event_type="tool_call", name=b.get("name"))
-                        tools[b.get("id")] = e
+                    if isinstance(b, dict) and b.get("type") == "toolCall" and tools.issue(
+                            b.get("id"), ev(**common, event_type="tool_call", name=b.get("name"))):
                         args = json.dumps(b.get("arguments"))
                         uri = SKILL_URI.search(args)
                         # A SKILL.md path counts only when read: bash, edit or
@@ -327,11 +352,9 @@ def pi_like(harness, files):
                         skill = uri.group(1) if uri else b.get("name") == "read" and skill_from_text(args)
                         if skill:
                             out.append(ev(**common, event_type="skill", name=skill, detail="read"))
-            elif m.get("role") == "toolResult" and m.get("toolCallId") in tools:
-                e = tools[m["toolCallId"]]
-                e["is_error"] = bool(m.get("isError"))
-                e["duration_ms"] = elapsed_ms(started.get(m["toolCallId"]) or e["ts"], d.get("timestamp"))
-        out += tools.values()
+            elif m.get("role") == "toolResult":
+                tools.result(m.get("toolCallId"), m.get("isError"), d.get("timestamp"))
+        out += tools.events()
     return out
 
 
@@ -367,26 +390,21 @@ def hermes_rows(c):
             n=n, input_tokens=i, output_tokens=o, cache_read=cr, cache_write=cw, reasoning_tokens=r,
             cost_usd=act or est, cost_source="reported" if act else "estimated"))
 
-    # Messages in order; each call id counts once, at its first row. Hermes
-    # writes the same call again with fresh timestamps when compression starts
-    # a continuation session, when it rewrites a session's messages, and as
-    # duplicate rows. Only the first result times the call: the copies are
-    # written milliseconds apart.
-    pending = {}  # call id -> (event, call timestamp), until its first result
-    seen = set()  # call ids
+    # Messages in order. Hermes writes the same call again with fresh timestamps
+    # when compression starts a continuation session, when it rewrites a
+    # session's messages, and as duplicate rows: ToolCalls counts the first call
+    # and times it to the first result (the copies are written ms apart).
+    tools = ToolCalls()
     for sid, role, ts, calls, call_id, content in c.execute(
             """select session_id, role, timestamp, tool_calls, tool_call_id, content from messages
                where role = 'tool' or (tool_calls is not null and tool_calls != '[]') order by id"""):
         if role == "tool":
-            e, start = pending.pop(call_id, (None, None))
-            if not e:
-                continue
-            e["duration_ms"] = max(0.0, (ts - start) * 1000)
             try:
                 res = json.loads(content or "")
-                e["is_error"] = isinstance(res, dict) and (res.get("success") is False or bool(res.get("error")))
+                err = isinstance(res, dict) and (res.get("success") is False or bool(res.get("error")))
             except (json.JSONDecodeError, TypeError):
-                e["is_error"] = False
+                err = False
+            tools.result(call_id, err, iso(ts))
             continue
         try:
             calls = json.loads(calls)
@@ -395,13 +413,8 @@ def hermes_rows(c):
         for call in calls if isinstance(calls, list) else []:
             fn = call.get("function") or {}
             cid = call.get("id")
-            if cid is not None:
-                if cid in seen:
-                    continue
-                seen.add(cid)
-            e = ev(**common(sid, ts), event_type="tool_call", name=fn.get("name"))
-            out.append(e)
-            pending[cid] = (e, ts)
+            if not tools.issue(cid, ev(**common(sid, ts), event_type="tool_call", name=fn.get("name"))):
+                continue
             if fn.get("name") == "skill_view":
                 try:
                     args = json.loads(fn.get("arguments") or "{}")
@@ -411,7 +424,7 @@ def hermes_rows(c):
                 if isinstance(args, dict) and args.get("name") and not args.get("file_path"):
                     out.append(ev(**common(sid, ts), event_type="skill",
                                   name=skill_name(args["name"]), detail="model"))
-    return out
+    return out + tools.events()
 
 
 # ------------------------------------------------------------ skill inventory

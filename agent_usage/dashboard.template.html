@@ -122,7 +122,7 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
   <div class="grid2">
     <section class="card">
       <h2>Tool calls</h2>
-      <p class="sub">Most-called tools. Duration is the time from call to result.</p>
+      <p class="sub">Most-called tools. Errors and duration count calls that got a result; No result is calls cut off before one.</p>
       <div class="scroll" id="tools"></div>
     </section>
     <section class="card">
@@ -148,8 +148,8 @@ const pct = x => (x * 100).toFixed(x < 0.1 ? 1 : 0) + "%";
 const el = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
 const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 
-// Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations]
-const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [] }));
+// Row: [day, machine, harness, type, name, n, in, out, cacheRead, cacheWrite, cost, estCost, errors, durations, noResult]
+const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [], nr: r[14] || 0 }));
 // Session: [day it was active, machine, harness, session number]
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2], id: s[3] }));
 const state = { days: 0, h: "", m: "", all: { tools: false, skills: false } };
@@ -198,12 +198,12 @@ const hideTip = () => tip.style.display = "none";
 // ------------------------------------------------------------------- tiles
 function tiles(rows, sess) {
   const sum = (t, f) => rows.filter(r => r.t === t).reduce((a, r) => a + f(r), 0);
-  const tools = sum("tool_call", r => r.n), errs = sum("tool_call", r => r.e);
+  const tools = sum("tool_call", r => r.n), errs = sum("tool_call", r => r.e), done = tools - sum("tool_call", r => r.nr);
   const est = sum("model_call", r => r.ce);
   const items = [
     ["Spend", usd(sum("model_call", r => r.c)), est ? `incl. ${usd(est)} estimated` : "reported by harnesses"],
     ["Model calls", fmt(sum("model_call", r => r.n)), `${fmt(sum("model_call", r => r.i + r.o + r.cr + r.cw))} tokens`],
-    ["Tool calls", fmt(tools), tools ? `${pct(errs / tools)} errored` : "—"],
+    ["Tool calls", fmt(tools), done ? `${pct(errs / done)} errored` : "—"],
     ["Skill loads", fmt(sum("skill", r => r.n)), `${new Set(rows.filter(r => r.t === "skill").map(r => r.k)).size} distinct skills`],
     ["Sessions", fmt(new Set(sess.map(s => s.id)).size), `${new Set(sess.map(s => s.h)).size} harness(es)`],
   ];
@@ -321,8 +321,8 @@ function group(rows, t) {
   const g = new Map();
   for (const r of rows.filter(r => r.t === t)) {
     const key = r.h + "\u0000" + r.k;
-    const a = g.get(key) || g.set(key, { h: r.h, k: r.k, n: 0, i: 0, o: 0, cr: 0, cw: 0, c: 0, ce: 0, e: 0, du: [] }).get(key);
-    a.n += r.n; a.i += r.i; a.o += r.o; a.cr += r.cr; a.cw += r.cw; a.c += r.c; a.ce += r.ce; a.e += r.e;
+    const a = g.get(key) || g.set(key, { h: r.h, k: r.k, n: 0, i: 0, o: 0, cr: 0, cw: 0, c: 0, ce: 0, e: 0, nr: 0, du: [] }).get(key);
+    a.n += r.n; a.i += r.i; a.o += r.o; a.cr += r.cr; a.cw += r.cw; a.c += r.c; a.ce += r.ce; a.e += r.e; a.nr += r.nr;
     for (const d of r.du) a.du.push(d);
   }
   for (const a of g.values()) a.du.sort((x, y) => x - y);
@@ -351,12 +351,14 @@ function models(rows) {
 function tools(rows) {
   const all = group(rows, "tool_call").sort((a, b) => b.n - a.n), g = state.all.tools ? all : all.slice(0, 15);
   const max = Math.max(1, ...g.map(a => a.n));
-  table("tools", ["Tool", "Calls", "", "Errors", "p50", "p95"],
+  // Errors are a share of the calls that got a result; calls cut off before theirs are counted apart.
+  const rate = a => a.n > a.nr ? a.e / (a.n - a.nr) : null;
+  table("tools", ["Tool", "Calls", "", "Errors", "No result", "p50", "p95"],
     g.map(a => {
-      const er = el("span", a.e / a.n >= 0.1 ? { class: "err" } : {}, a.n ? pct(a.e / a.n) : "—");
-      return [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Calls", fmt(a.n)], [null, "Errors", fmt(a.e)]]),
-        er, dur(q(a.du, .5)), dur(q(a.du, .95))];
-    }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, a.n ? a.e / a.n : null, q(a.du, .5), q(a.du, .95)]) });
+      const er = el("span", rate(a) >= 0.1 ? { class: "err" } : {}, rate(a) == null ? "—" : pct(rate(a)));
+      return [keyed(a.h, a.k), fmt(a.n), bar(a.h, a.n / max, a.k, [[col(a.h), a.h, ""], [null, "Calls", fmt(a.n)], [null, "Errors", fmt(a.e)], [null, "No result", fmt(a.nr)]]),
+        er, a.nr ? fmt(a.nr) : "—", dur(q(a.du, .5)), dur(q(a.du, .95))];
+    }), { left: [0, 2], keys: g.map(a => [a.k, a.n, undefined, rate(a), a.nr, q(a.du, .5), q(a.du, .95)]) });
   $("tools").querySelectorAll("td:nth-child(3), th:nth-child(3)").forEach(c => c.classList.add("barcell"));
   showAll("tools", all.length, 15, "most-called");
 }

@@ -15,7 +15,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .ingest import W_CR, W_CW5, W_IN, W_OUT, elapsed_ms, ev, iso
+from .ingest import W_CR, W_CW5, W_IN, W_OUT, ToolCalls, ev, iso
 
 PAGE = 500  # the CLI's maximum --limit
 WORKERS = 8
@@ -141,7 +141,7 @@ def thread_events(thread, usage_md):
     rows by price weight. Without a usage report, only the messages."""
     tid = thread["id"]
     common = dict(harness="amp", session_id=tid, project=project_of(thread))
-    out, tools = [], {}
+    out, tools = [], ToolCalls()
     for msg in thread.get("messages") or []:
         u = msg.get("usage") or {}
         ts = u.get("timestamp") or msg.get("createdAt") or iso((msg.get("meta") or {}).get("sentAt"))
@@ -152,16 +152,16 @@ def thread_events(thread, usage_md):
                           cache_write=u.get("cacheCreationInputTokens", 0)))
         for b in msg.get("content") or []:
             if b.get("type") == "tool_use":
-                tools[b["id"]] = e = ev(**common, ts=ts, event_type="tool_call", name=b["name"])
-                out.append(e)
+                if not tools.issue(b["id"], ev(**common, ts=ts, event_type="tool_call", name=b["name"])):
+                    continue
                 name = (b.get("input") or {}).get("name")
                 if b["name"] == "skill" and name:
                     out.append(ev(**common, ts=ts, event_type="skill", name=name, detail="model"))
-            elif b.get("type") == "tool_result" and b.get("toolUseID") in tools:
-                e = tools[b["toolUseID"]]
-                e["is_error"] = (b.get("run") or {}).get("status") == "error"
+            elif b.get("type") == "tool_result":
                 # Results of one turn arrive in one message: an upper bound per tool.
-                e["duration_ms"] = elapsed_ms(e["ts"], msg.get("createdAt"))
+                tools.result(b.get("toolUseID"), (b.get("run") or {}).get("status") == "error",
+                             msg.get("createdAt"))
+    out += tools.events()
 
     if usage_md is None:
         return out

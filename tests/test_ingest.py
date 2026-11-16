@@ -270,3 +270,18 @@ def test_amp_ingest_retries_rate_limited_threads(tmp_path, monkeypatch):
     assert run() == (set(), {"T-1": 8, "T-2": 8})
     listed[0]["updated"] = "u2"
     assert run()[0] == {"T-1"}
+
+
+def test_amp_tool_call_counted_once_with_its_first_result():
+    """A tool call repeated in the export counts once and keeps its first result;
+    a call the thread ended before answering has no result (is_error None)."""
+    use = {"type": "tool_use", "id": "TU-1", "name": "Read", "input": {}}
+    thread = {"id": "T-9", "messages": [
+        {"role": "assistant", "createdAt": "2026-10-09T10:00:00.000Z", "content": [
+            use, use, {"type": "tool_use", "id": "TU-2", "name": "Bash", "input": {}}]},
+        {"role": "user", "createdAt": "2026-10-09T10:00:02.000Z", "content": [
+            {"type": "tool_result", "toolUseID": "TU-1", "run": {"status": "done"}}]},
+        {"role": "user", "createdAt": "2026-10-09T10:00:09.000Z", "content": [
+            {"type": "tool_result", "toolUseID": "TU-1", "run": {"status": "error"}}]}]}
+    got = sorted((e["name"], e["is_error"], e["duration_ms"]) for e in amp.thread_events(thread, None))
+    assert got == [("Bash", None, None), ("Read", False, 2000.0)]
