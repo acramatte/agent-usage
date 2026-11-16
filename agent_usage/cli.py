@@ -3,7 +3,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import socket
+import subprocess
 import webbrowser
 from pathlib import Path
 
@@ -42,12 +44,24 @@ def ingest(args):
     (run_amp if args.amp else run)(args.data_dir, args.machine)
 
 
+def open_page(path):
+    uri = path.resolve().as_uri()
+    opener = shutil.which("xdg-open")
+    if opener and (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        # Detached and silenced: the browser it starts would otherwise write its
+        # logs to this terminal after we exit, over the shell prompt.
+        subprocess.Popen([opener, uri], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    else:
+        webbrowser.open(uri)
+
+
 def dashboard(args):
     from .dashboard import build
 
     out = build(args.data_dir, args.out or args.data_dir / "dashboard.html")
     if not args.no_open:
-        webbrowser.open(out.resolve().as_uri())
+        open_page(out)
 
 
 def machine_name(s):
