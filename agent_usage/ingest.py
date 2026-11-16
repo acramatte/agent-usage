@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -47,12 +48,22 @@ def project_of(cwd):
     return Path(cwd).name if cwd else None
 
 
+def source_of(path):
+    """A file as rows record it: under ~ when it is in the home directory."""
+    home = os.path.expanduser("~")
+    path = str(path)
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
 def ev(**kw):
+    """One row. event_id identifies the event within its session across runs;
+    source is the file (or server) it was read from. write() uses both to keep
+    the rows of files a harness has pruned."""
     base = dict(ts=None, machine=None, harness=None, session_id=None, project=None,
                 event_type=None, name=None, detail=None, n=1, input_tokens=0,
                 output_tokens=0, cache_read=0, cache_write=0, reasoning_tokens=0,
                 cost_usd=None, cost_source=None, duration_ms=None, is_error=None,
-                is_subagent=False)
+                is_subagent=False, event_id=None, source=None)
     base.update(kw)
     return base
 
@@ -129,11 +140,13 @@ def model_family(key):
     return re.sub(r"\[[^\]]*\]$", "", key)
 
 
-def claude_code(files, skill_names=(), prior_rates=None):
-    """prior_rates: {(session, model): (reported $, units)} from earlier ingests,
-    so estimates stay calibrated after the reporting sessions are pruned."""
+def claude_code(files, skill_names=(), prior=()):
+    """prior: model_call rows of earlier ingests. Their reported costs keep the
+    estimates calibrated after the reporting sessions are pruned, and the rows
+    write() keeps for a session still on disk (its subagent file pruned before
+    the main one) take their share of its reported cost again."""
     out = []
-    cost_state = {}  # session -> modelUsage of the last cost-state record
+    cost_state = {}  # session -> (ts, modelUsage, source) of the last cost-state record
     # Keyed across files: a session copied into a second store path (or a
     # resumed transcript repeating earlier lines) must not count twice.
     calls = {}  # message.id -> event (usage repeats per content block; keep last)
@@ -141,6 +154,7 @@ def claude_code(files, skill_names=(), prior_rates=None):
     seen = set()  # line uuids
     for f in files:
         sub = "/subagents/" in f
+        src = source_of(f)
         for d in jsonl(f):
             if not isinstance(d, dict):
                 continue
@@ -151,9 +165,9 @@ def claude_code(files, skill_names=(), prior_rates=None):
             t = d.get("type")
             sid = d.get("sessionId")
             if t == "cost-state":
-                cost_state[sid] = (d.get("timestamp"), d.get("modelUsage") or {})
+                cost_state[sid] = (d.get("timestamp"), d.get("modelUsage") or {}, src)
                 continue
-            common = dict(harness="claude-code", session_id=sid, ts=d.get("timestamp"),
+            common = dict(harness="claude-code", session_id=sid, ts=d.get("timestamp"), source=src,
                           project=project_of(d.get("cwd")), is_subagent=sub or d.get("isSidechain", False))
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
             content = msg.get("content")
@@ -163,27 +177,30 @@ def claude_code(files, skill_names=(), prior_rates=None):
                 u = msg.get("usage") or {}
                 if model and model != "<synthetic>" and u:
                     cc = u.get("cache_creation") or {}
-                    calls[msg.get("id") or d.get("uuid")] = ev(**common, event_type="model_call", name=model,
+                    cid = msg.get("id") or d.get("uuid")
+                    calls[cid] = ev(**common, event_type="model_call", name=model, event_id=cid,
                         input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0),
                         cache_read=u.get("cache_read_input_tokens", 0),
                         cache_write=u.get("cache_creation_input_tokens", 0),
                         reasoning_tokens=(u.get("output_tokens_details") or {}).get("thinking_tokens", 0),
                         _cw1h=cc.get("ephemeral_1h_input_tokens", 0))
                 for b in blocks:
-                    if b.get("type") != "tool_use" or not tools.issue(
-                            b.get("id"), ev(**common, event_type="tool_call", name=b.get("name"))):
+                    if b.get("type") != "tool_use" or not tools.issue(b.get("id"), ev(
+                            **common, event_type="tool_call", name=b.get("name"), event_id=b.get("id"))):
                         continue
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     if b.get("name") == "Skill" and inp.get("skill"):
-                        out.append(ev(**common, event_type="skill", name=skill_name(inp["skill"]), detail="model"))
+                        out.append(ev(**common, event_type="skill", name=skill_name(inp["skill"]), detail="model",
+                                      event_id=f"{b.get('id')}/skill"))
             elif t == "user":
                 if isinstance(content, str):
                     m = re.search(r"<command-name>/?([^<]+)</command-name>", content)
                     if m:
                         name = m.group(1).strip()
                         kind = "skill" if skill_name(name) in skill_names else "command"
-                        out.append(ev(**common, event_type=kind,
-                                      name=skill_name(name) if kind == "skill" else name, detail="user"))
+                        out.append(ev(**common, event_type=kind, detail="user",
+                                      name=skill_name(name) if kind == "skill" else name,
+                                      event_id=d.get("uuid") or f"{d.get('timestamp')}/{name}"))
                 else:
                     r = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
                     dur = (r["durationMs"] if "durationMs" in r
@@ -198,9 +215,17 @@ def claude_code(files, skill_names=(), prior_rates=None):
     by_sm = defaultdict(list)
     for e in calls.values():
         by_sm[(e["session_id"], e["name"])].append(e)
+    # Earlier rows of a reporting session whose file is gone: write() keeps them,
+    # so they are costed (and written) again with the rest of the session.
+    read = {source_of(f) for f in files}
+    ids = {(e["session_id"], e["event_id"]) for e in calls.values()}
+    for p in prior:
+        if (p["session_id"] in cost_state and p.get("event_id") is not None and p.get("source") not in read
+                and p["detail"] != "background" and (p["session_id"], p["event_id"]) not in ids):
+            by_sm[(p["session_id"], p["name"])].append(dict(p, cost_usd=None, cost_source=None))
     project = {e["session_id"]: e["project"] for e in calls.values()}
     reported = {}  # (session, model) -> $
-    for sid, (ts, usage) in cost_state.items():
+    for sid, (ts, usage, src) in cost_state.items():
         side = defaultdict(lambda: defaultdict(float))
         for key, u in usage.items():
             if not isinstance(u, dict) or u.get("costUSD") is None:
@@ -215,8 +240,8 @@ def claude_code(files, skill_names=(), prior_rates=None):
         # one call since cost-state has no call count.
         for model, u in side.items():
             by_sm[(sid, model)].append(ev(harness="claude-code", session_id=sid, ts=ts, project=project.get(sid),
-                event_type="model_call", name=model, detail="background",
-                input_tokens=int(u["inputTokens"]), output_tokens=int(u["outputTokens"]),
+                event_type="model_call", name=model, detail="background", event_id=f"background/{model}",
+                source=src, input_tokens=int(u["inputTokens"]), output_tokens=int(u["outputTokens"]),
                 cache_read=int(u["cacheReadInputTokens"]), cache_write=int(u["cacheCreationInputTokens"])))
     for evs in by_sm.values():
         out += evs
@@ -233,9 +258,16 @@ def claude_code(files, skill_names=(), prior_rates=None):
         if cost > 0:  # subscription (OAuth) sessions report $0
             rate_num[model] += cost
             rate_den[model] += total
+    # Sessions pruned from disk keep calibrating the rate. 1h cache writes are
+    # not stored apart, so they weigh as 5m ones there.
     on_disk = {sid for sid, _ in by_sm}
-    for (sid, model), (cost, total) in (prior_rates or {}).items():
-        if sid not in on_disk and cost > 0 and total > 0:
+    pruned = defaultdict(lambda: [0.0, 0.0])  # (session, model) -> reported $, units
+    for p in prior:
+        if p["session_id"] not in on_disk and p["cost_source"] == "reported":
+            pruned[(p["session_id"], p["name"])][0] += p["cost_usd"] or 0
+            pruned[(p["session_id"], p["name"])][1] += units(p)
+    for (sid, model), (cost, total) in pruned.items():
+        if cost > 0 and total > 0:
             rate_num[model] += cost
             rate_den[model] += total
     for (sid, model), evs in by_sm.items():
@@ -271,13 +303,15 @@ def codex(files):
                 model = p.get("model") or model
                 cwd = p.get("cwd") or cwd
                 continue
-            common = dict(harness="codex", session_id=sid, ts=d.get("timestamp"), project=project_of(cwd))
+            common = dict(harness="codex", session_id=sid, ts=d.get("timestamp"), project=project_of(cwd),
+                          source=source_of(f))
             if t == "event_msg" and pt == "token_count":
                 tot = ((p.get("info") or {}).get("total_token_usage")) or {}
                 if tot.get("total_tokens", 0) > prev_total.get("total_tokens", 0):
                     dl = {k: tot.get(k, 0) - prev_total.get(k, 0) for k in tot}
                     cached = dl.get("cached_input_tokens", 0)
                     out.append(ev(**common, event_type="model_call", name=model,
+                        event_id=f"tokens/{tot['total_tokens']}",
                         input_tokens=dl.get("input_tokens", 0) - cached, cache_read=cached,
                         cache_write=dl.get("cache_write_input_tokens", 0),
                         output_tokens=dl.get("output_tokens", 0),
@@ -285,14 +319,15 @@ def codex(files):
                 if tot:
                     prev_total = tot
             elif t == "response_item" and pt in ("function_call", "custom_tool_call"):
-                if not tools.issue(p.get("call_id"), ev(**common, event_type="tool_call", name=p.get("name"))):
+                cid = p.get("call_id")
+                if not tools.issue(cid, ev(**common, event_type="tool_call", name=p.get("name"), event_id=cid)):
                     continue
                 args = p.get("arguments") or p.get("input")
                 # Codex reads files through its shell tools; apply_patch writes them.
                 skill = p.get("name") != "apply_patch" and skill_from_text(
                     args if isinstance(args, str) else json.dumps(args))
                 if skill:
-                    out.append(ev(**common, event_type="skill", name=skill, detail="read"))
+                    out.append(ev(**common, event_type="skill", name=skill, detail="read", event_id=f"{cid}/skill"))
             elif t == "response_item" and pt in ("function_call_output", "custom_tool_call_output"):
                 o = p.get("output") if isinstance(p.get("output"), str) else json.dumps(p.get("output"))
                 code = re.search(r"(?:exited with code|Exit code:) (\d+)", o)
@@ -323,11 +358,12 @@ def pi_like(harness, files):
                 continue
             m = d.get("message") or {}
             common = dict(harness=harness, session_id=sid, ts=d.get("timestamp"),
-                          project=project_of(cwd), is_subagent=sub)
+                          project=project_of(cwd), is_subagent=sub, source=source_of(f))
 
             def usage_event(model, u, detail=None):
                 cost = (u.get("cost") or {}).get("total")
                 return ev(**common, event_type="model_call", name=model, detail=detail,
+                    event_id=d.get("id") or f"{d.get('timestamp')}/{detail}/{model}",
                     input_tokens=u.get("input", 0), output_tokens=u.get("output", 0),
                     cache_read=u.get("cacheRead", 0), cache_write=u.get("cacheWrite", 0),
                     reasoning_tokens=u.get("reasoning", u.get("reasoningTokens", 0)),
@@ -343,15 +379,16 @@ def pi_like(harness, files):
                     out.append(usage_event(m.get("model"), m["usage"]))
                 content = m.get("content")
                 for b in content if isinstance(content, list) else []:
-                    if isinstance(b, dict) and b.get("type") == "toolCall" and tools.issue(
-                            b.get("id"), ev(**common, event_type="tool_call", name=b.get("name"))):
+                    if isinstance(b, dict) and b.get("type") == "toolCall" and tools.issue(b.get("id"), ev(
+                            **common, event_type="tool_call", name=b.get("name"), event_id=b.get("id"))):
                         args = json.dumps(b.get("arguments"))
                         uri = SKILL_URI.search(args)
                         # A SKILL.md path counts only when read: bash, edit or
                         # write calls touching one do not load the skill.
                         skill = uri.group(1) if uri else b.get("name") == "read" and skill_from_text(args)
                         if skill:
-                            out.append(ev(**common, event_type="skill", name=skill, detail="read"))
+                            out.append(ev(**common, event_type="skill", name=skill, detail="read",
+                                          event_id=f"{b.get('id')}/skill"))
             elif m.get("role") == "toolResult":
                 tools.result(m.get("toolCallId"), m.get("isError"), d.get("timestamp"))
         out += tools.events()
@@ -367,19 +404,19 @@ def hermes(dbs):
 def hermes_db(db):
     c = sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True)
     try:
-        return hermes_rows(c)
+        return hermes_rows(c, source_of(db))
     finally:
         c.close()
 
 
-def hermes_rows(c):
+def hermes_rows(c, source=None):
     sessions = {r[0]: r[1:] for r in c.execute("select id, cwd, parent_session_id from sessions")}
     out = []
 
     def common(sid, ts):
         cwd, parent = sessions.get(sid, (None, None))
         return dict(harness="hermes", session_id=sid, ts=iso(ts), project=project_of(cwd),
-                    is_subagent=parent is not None)
+                    is_subagent=parent is not None, source=source)
 
     # actual_cost_usd defaults to 0 when the provider reports none.
     for (sid, model, task, n, i, o, cr, cw, r, est, act, first) in c.execute(
@@ -387,6 +424,7 @@ def hermes_rows(c):
                       cache_read_tokens, cache_write_tokens, reasoning_tokens,
                       estimated_cost_usd, actual_cost_usd, first_seen from session_model_usage"""):
         out.append(ev(**common(sid, first), event_type="model_call", name=model, detail=task or "main",
+            event_id=f"{model}/{task or 'main'}",
             n=n, input_tokens=i, output_tokens=o, cache_read=cr, cache_write=cw, reasoning_tokens=r,
             cost_usd=act or est, cost_source="reported" if act else "estimated"))
 
@@ -413,7 +451,8 @@ def hermes_rows(c):
         for call in calls if isinstance(calls, list) else []:
             fn = call.get("function") or {}
             cid = call.get("id")
-            if not tools.issue(cid, ev(**common(sid, ts), event_type="tool_call", name=fn.get("name"))):
+            if not tools.issue(cid, ev(**common(sid, ts), event_type="tool_call", name=fn.get("name"),
+                                       event_id=cid)):
                 continue
             if fn.get("name") == "skill_view":
                 try:
@@ -423,7 +462,7 @@ def hermes_rows(c):
                 # With file_path it reads a supporting file of an already loaded skill.
                 if isinstance(args, dict) and args.get("name") and not args.get("file_path"):
                     out.append(ev(**common(sid, ts), event_type="skill",
-                                  name=skill_name(args["name"]), detail="model"))
+                                  name=skill_name(args["name"]), detail="model", event_id=f"{cid}/skill"))
     return out + tools.events()
 
 
@@ -465,7 +504,8 @@ def skill_inventory():
 
 
 # Registry id -> (harness name in the events table, store paths the adapter
-# reads, adapter(files, installed skills of that harness, prior cost rates)).
+# reads, adapter(files, installed skills of that harness, earlier Claude Code
+# model_call rows)).
 # Claude Code's and Codex's prompt-history files and Codex's zstd rollouts are
 # listed in the registry but carry no usage we can read.
 ADAPTERS = {
@@ -477,14 +517,17 @@ ADAPTERS = {
 }
 
 
-def collect(prior_rates=None):
+def collect(prior=()):
     """Fresh events from every adapter, and the installed-skill inventory."""
     inv = skill_inventory()
     rows = []
     for rid, (name, keep, adapter) in ADAPTERS.items():
         files = registry.files_for(rid, keep)
-        got = adapter(files, set(inv.get(name, ())), prior_rates)
+        got = adapter(files, set(inv.get(name, ())), prior)
         print(f"{name:12} {len(got):6} events from {len(files)} files")
+        if files and not got:
+            print(f"{name:12} warning: no events in {len(files)} files; if they hold sessions, "
+                  "their format has changed (earlier events are kept)", file=sys.stderr)
         rows += got
     return rows, inv
 
@@ -496,17 +539,11 @@ def lit(s):
 
 def run(data_dir, machine):
     dest = Path(data_dir) / f"events-{machine}.parquet"
-    prior = {}
+    prior = []
     if dest.exists():
-        # Reported Claude Code costs of earlier ingests keep calibrating the
-        # estimates once their transcripts are pruned. 1h cache writes are not
-        # stored apart, so they weigh as 5m ones here.
-        prior = {(s, m): (c, u) for s, m, c, u in duckdb.sql(f"""
-            select session_id, name, sum(cost_usd),
-                   sum(input_tokens * {W_IN} + output_tokens * {W_OUT} + cache_read * {W_CR}
-                       + cache_write * {W_CW5})::double
-            from {lit(dest)} where harness = 'claude-code' and event_type = 'model_call'
-              and cost_source = 'reported' group by 1, 2""").fetchall()}
+        rel = duckdb.sql(f"""select * replace (ts::varchar as ts) from {lit(dest)}
+                             where harness = 'claude-code' and event_type = 'model_call'""")
+        prior = [dict(zip(rel.columns, r)) for r in rel.fetchall()]
     rows, inv = collect(prior)
     dest = write(data_dir, machine, rows)
     (Path(data_dir) / f"skills-{machine}.json").write_text(json.dumps(inv, indent=2))
@@ -538,14 +575,6 @@ def write(data_dir, machine, rows):
     with tempfile.NamedTemporaryFile("w", suffix=".ndjson", delete=False) as tmp:
         for r in rows:
             tmp.write(json.dumps(r) + "\n")
-    # Harnesses prune old transcripts (Claude Code after ~30 days), so keep
-    # previously ingested sessions that are no longer on disk.
-    keep = ""
-    if dest.exists():
-        keep = f"""union all by name
-          select * from {lit(dest)} p
-          where not exists (select 1 from fresh f where f.harness = p.harness
-                            and f.session_id is not distinct from p.session_id)"""
     staged = f"{dest}.tmp"
     try:
         con.sql(f"""
@@ -556,10 +585,23 @@ def write(data_dir, machine, rows):
                 project:'varchar', event_type:'varchar', name:'varchar', detail:'varchar',
                 n:'bigint', input_tokens:'bigint', output_tokens:'bigint', cache_read:'bigint',
                 cache_write:'bigint', reasoning_tokens:'bigint', cost_usd:'double',
-                cost_source:'varchar', duration_ms:'double', is_error:'boolean', is_subagent:'boolean'}})
+                cost_source:'varchar', duration_ms:'double', is_error:'boolean', is_subagent:'boolean',
+                event_id:'varchar', source:'varchar'}})
             ) where ts is not null
         """)
-        con.sql(f"copy (select * from fresh {keep} order by ts) to {lit(staged)} (format parquet)")
+        # Harnesses prune old transcripts (Claude Code after ~30 days), file by
+        # file. A stored row is replaced when this run read its event again (same
+        # event_id) or read the file it came from again for its session; else
+        # its file is gone and it is kept. Files written before event_id and
+        # source existed lack them: their rows go when their session is read.
+        con.sql(f"""create temp table kept as select * from (select * from fresh where false)
+                    union all by name select * from {lit(dest) if dest.exists() else "fresh where false"}""")
+        con.sql("""delete from kept p where exists (
+                     select 1 from fresh f where f.harness = p.harness
+                       and f.session_id is not distinct from p.session_id
+                       and (f.event_id = p.event_id or f.source = p.source or p.source is null))""")
+        con.sql(f"copy (select * from fresh union all by name select * from kept order by ts) "
+                f"to {lit(staged)} (format parquet)")
         os.replace(staged, dest)
     finally:
         os.unlink(tmp.name)
@@ -567,4 +609,6 @@ def write(data_dir, machine, rows):
             os.unlink(staged)
     total = con.sql(f"select count(*) from {lit(dest)}").fetchall()[0][0]
     print(f"wrote {dest} ({len(rows)} fresh, {total} total events)")
+    for harness, n in con.sql("select harness, count(*) from kept group by 1 order by 1").fetchall():
+        print(f"{harness:12} {n:6} events kept from earlier runs (files pruned, or threads unchanged)")
     return dest

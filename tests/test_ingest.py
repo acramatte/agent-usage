@@ -44,7 +44,9 @@ def E(harness, session_id, project, ts, event_type, name, **kw):
 
 
 def normalized(events):
-    rows = [{k: round(v, 9) if isinstance(v, float) else v for k, v in e.items()} for e in events]
+    """Rows to compare, without event_id and source (the merge tests cover them)."""
+    rows = [{k: round(v, 9) if isinstance(v, float) else v for k, v in e.items()
+             if k not in ("event_id", "source")} for e in events]
     return sorted(rows, key=lambda r: tuple(str(v) for v in r.values()))
 
 
@@ -285,3 +287,33 @@ def test_amp_tool_call_counted_once_with_its_first_result():
             {"type": "tool_result", "toolUseID": "TU-1", "run": {"status": "error"}}]}]}
     got = sorted((e["name"], e["is_error"], e["duration_ms"]) for e in amp.thread_events(thread, None))
     assert got == [("Bash", None, None), ("Read", False, 2000.0)]
+
+
+def test_rows_of_a_pruned_subagent_file_are_kept_and_costed_with_their_session(tmp_path, monkeypatch):
+    """Claude Code prunes a session's files one by one: the subagent file's rows
+    stay, and the session's reported cost is still split over all of its calls."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "HERMES_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    proj = tmp_path / ".claude/projects/-work"
+    (proj / "S/subagents").mkdir(parents=True)
+
+    def call(mid, side, inp):
+        return json.dumps({"type": "assistant", "uuid": mid, "sessionId": "S", "cwd": "/work",
+                           "timestamp": "2026-10-01T10:00:00Z", "isSidechain": side,
+                           "message": {"id": mid, "model": "m", "usage": {"input_tokens": inp}}}) + "\n"
+    cost = json.dumps({"type": "cost-state", "sessionId": "S", "timestamp": "2026-10-01T10:00:09Z",
+                       "modelUsage": {"m": {"costUSD": 0.4, "inputTokens": 400}}}) + "\n"
+    (proj / "S.jsonl").write_text(call("m1", False, 100) + cost)
+    (proj / "S/subagents/agent-1.jsonl").write_text(call("m2", True, 300))
+    data = tmp_path / "data"
+
+    def rows():
+        dest = ingest.run(data, "m1")
+        return sorted(duckdb.sql(f"select is_subagent, round(cost_usd, 6) from '{dest}' "
+                                 "where session_id = 'S'").fetchall())
+
+    assert rows() == [(False, 0.1), (True, 0.3)]
+    (proj / "S/subagents/agent-1.jsonl").unlink()
+    assert rows() == [(False, 0.1), (True, 0.3)]
+    assert rows() == [(False, 0.1), (True, 0.3)]

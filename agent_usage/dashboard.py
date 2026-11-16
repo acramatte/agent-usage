@@ -12,7 +12,8 @@ def build(data_dir, out):
     data_dir = Path(data_dir)
     if not glob.glob(str(data_dir / "events-*.parquet")):
         raise SystemExit(f"no events-*.parquet in {data_dir}; run `agent-usage ingest` first")
-    events = "'" + str(data_dir / "events-*.parquet").replace("'", "''") + "'"
+    # Files written before a column existed lack it: match columns by name.
+    events = "read_parquet('" + str(data_dir / "events-*.parquet").replace("'", "''") + "', union_by_name = true)"
     con = duckdb.connect()
     # Days are local to the machine building the page (DuckDB's session time
     # zone); the page's date math uses the same local calendar.

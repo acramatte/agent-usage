@@ -77,10 +77,12 @@ One row per event: `ts, machine, harness, session_id, project, event_type`
 (`model_call | tool_call | skill | command`), `name` (model / tool / skill), `detail`,
 `n` (call count; >1 only for Hermes aggregates; a Claude Code background-model total counts as 1), token columns, `cost_usd`, `cost_source`
 (`reported | estimated`), `duration_ms`, `is_error` (null for a tool call whose transcript ended
-before its result), `is_subagent`.
+before its result), `is_subagent`, `event_id` (the event within its session), `source` (the
+file it was read from, `~`-relative, or `ampcode.com`).
 
-Re-running `ingest` replaces sessions still on disk and keeps the ones a harness has
-since pruned (Claude Code deletes transcripts after ~30 days), so run it regularly.
+Re-running `ingest` replaces the events it reads again and keeps the ones a harness has
+since pruned (Claude Code deletes transcripts after ~30 days), file by file: a session whose
+subagent file is gone keeps that file's events. Run it regularly.
 
 ## Multiple machines
 

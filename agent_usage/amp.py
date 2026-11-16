@@ -18,6 +18,7 @@ from pathlib import Path
 from .ingest import W_CR, W_CW5, W_IN, W_OUT, ToolCalls, ev, iso
 
 PAGE = 500  # the CLI's maximum --limit
+SOURCE = "ampcode.com"  # where rows were read from (a file, for the local harnesses)
 WORKERS = 8
 
 
@@ -140,23 +141,28 @@ def thread_events(thread, usage_md):
     estimate for your own provider keys or subscriptions) is split across its
     rows by price weight. Without a usage report, only the messages."""
     tid = thread["id"]
-    common = dict(harness="amp", session_id=tid, project=project_of(thread))
+    # One source for the whole thread: a re-read thread replaces all its rows,
+    # so messages dropped by an edit do not linger.
+    common = dict(harness="amp", session_id=tid, project=project_of(thread), source=SOURCE)
     out, tools = [], ToolCalls()
-    for msg in thread.get("messages") or []:
+    for i, msg in enumerate(thread.get("messages") or []):
         u = msg.get("usage") or {}
         ts = u.get("timestamp") or msg.get("createdAt") or iso((msg.get("meta") or {}).get("sentAt"))
         if msg.get("role") == "assistant" and u.get("model"):
             out.append(ev(**common, ts=ts, event_type="model_call", name=u["model"].rsplit("/", 1)[-1],
+                          event_id=f"message/{i}",
                           input_tokens=u.get("inputTokens", 0), output_tokens=u.get("outputTokens", 0),
                           cache_read=u.get("cacheReadInputTokens", 0),
                           cache_write=u.get("cacheCreationInputTokens", 0)))
         for b in msg.get("content") or []:
             if b.get("type") == "tool_use":
-                if not tools.issue(b["id"], ev(**common, ts=ts, event_type="tool_call", name=b["name"])):
+                if not tools.issue(b["id"], ev(**common, ts=ts, event_type="tool_call", name=b["name"],
+                                               event_id=b["id"])):
                     continue
                 name = (b.get("input") or {}).get("name")
                 if b["name"] == "skill" and name:
-                    out.append(ev(**common, ts=ts, event_type="skill", name=name, detail="model"))
+                    out.append(ev(**common, ts=ts, event_type="skill", name=name, detail="model",
+                                  event_id=f"{b['id']}/skill"))
             elif b.get("type") == "tool_result":
                 # Results of one turn arrive in one message: an upper bound per tool.
                 tools.result(b.get("toolUseID"), (b.get("run") or {}).get("status") == "error",
@@ -197,6 +203,7 @@ def thread_events(thread, usage_md):
         cr = min(inp, round(cache_left * inp / rest_in)) if rest_in else 0
         name = calls[k][0]["name"] if calls.get(k) else models[k]["name"]
         e = ev(**common, ts=first, event_type="model_call", name=name, detail="subagent", n=n,
+               event_id=f"subagent/{k}",
                input_tokens=inp - cr, cache_read=cr, output_tokens=outp, is_subagent=True)
         calls[k].append(e)
         out.append(e)
