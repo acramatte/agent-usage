@@ -553,11 +553,7 @@ def run(data_dir, machine):
 def run_amp(data_dir, machine):
     from . import amp
 
-    dest = Path(data_dir) / f"events-{machine}.parquet"
-    known = set()
-    if dest.exists():
-        known = {r[0] for r in duckdb.sql(f"select distinct session_id from {lit(dest)}").fetchall()}
-    rows, save = amp.collect(data_dir, known)
+    rows, save = amp.collect(data_dir, (Path(data_dir) / f"events-{machine}.parquet").exists())
     dest = write(data_dir, machine, rows)
     save()
     return dest

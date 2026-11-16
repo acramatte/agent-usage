@@ -231,40 +231,76 @@ def thread_events(thread, usage_md):
 
 # --------------------------------------------------------------------- ingest
 
-def collect(data_dir, known_sessions):
-    """Events for threads new or updated since the last run, and the state to
-    save once they are written."""
+# Bump when thread_events reads threads differently: every thread is then read
+# again on the next runs (a stale thread keeps its rows until its report is read).
+PARSER = 1
+
+
+def thread_state(record, listed):
+    """A listed thread's state: `unseen` (no record), `stale` (updated since it
+    was read, or read by an older PARSER), else its record's: `complete` (read
+    with its usage report) or `no_report` (read without it, so no cost)."""
+    if record is None:
+        return "unseen"
+    if record["updated"] != listed["updated"] or record["parser"] != PARSER:
+        return "stale"
+    return record["state"]
+
+
+def collect(data_dir, have_events):
+    """Events for every thread not `complete`, and the state to save once they
+    are written. amp-threads.json keeps one record per thread: {updated, state,
+    parser}. have_events: whether events-ampcode.parquet exists; without it the
+    records describe rows that are gone, so every thread is read again."""
     if not shutil.which("amp"):
         raise SystemExit("ingest --amp needs the amp CLI: https://ampcode.com/manual")
     state_file = Path(data_dir) / "amp-threads.json"
-    seen = json.loads(state_file.read_text()) if state_file.exists() else {}
+    saved = json.loads(state_file.read_text()) if state_file.exists() and have_events else {}
+    # Before records, the file kept each complete thread's `updated` only.
+    records = {tid: r if isinstance(r, dict) else dict(updated=r, state="complete", parser=1)
+               for tid, r in saved.items()}
     threads = list_threads()
-    todo = [t["id"] for t in threads
-            if t["id"] not in known_sessions or seen.get(t["id"]) != t["updated"]]
-    print(f"amp          {len(threads)} threads, fetching {len(todo)} new or updated")
-    rows, limited, done = [], threading.Event(), set()
+    states = {t["id"]: thread_state(records.get(t["id"]), t) for t in threads}
+    todo = [t for t in threads if states[t["id"]] != "complete"]
+    counts = {s: sum(states[t["id"]] == s for t in todo) for s in ("unseen", "stale", "no_report")}
+    print(f"amp          {len(threads)} threads, reading {len(todo)}: {counts['unseen']} new, "
+          f"{counts['stale']} updated, {counts['no_report']} still without cost")
+    rows, limited = [], threading.Event()
 
-    def one(tid):
-        """A thread's events and whether its usage report was read; on an
-        unexpected export or report, a warning and no events (retried next run)."""
+    def one(t):
+        """A thread's events and new record, or None to leave its record as it
+        is: on an unexpected export or report (a warning; retried next run), or
+        when a stale thread that had its report cannot get it now, so that its
+        costed rows stay until a later run."""
+        tid = t["id"]
+        keep = records.get(tid, {}).get("state") == "complete"
+        if keep and limited.is_set():
+            return None
         try:
             thread, usage_md = fetch(tid, limited)
-            return thread_events(thread, usage_md), usage_md is not None
+            if usage_md is None and keep:
+                return None
+            return thread_events(thread, usage_md), dict(
+                updated=t["updated"], state="no_report" if usage_md is None else "complete", parser=PARSER)
         except Exception as e:  # noqa: BLE001 -- one odd thread must not stop the rest
             warn(tid, f"skipped: {type(e).__name__}: {e}")
-            return [], False
+            return None
 
+    state = {t["id"]: records[t["id"]] for t in threads if t["id"] in records}
+    deferred = 0
     with ThreadPoolExecutor(WORKERS) as pool:
-        for tid, (events, reported) in zip(todo, pool.map(one, todo)):
-            rows += events
-            if reported:
-                done.add(tid)
-    if limited.is_set() and (missing := len(todo) - len(done)):
+        for t, got in zip(todo, pool.map(one, todo)):
+            if got is None:
+                deferred += states[t["id"]] == "stale" and limited.is_set()
+                continue
+            rows += got[0]
+            state[t["id"]] = got[1]
+    if deferred:
+        print(f"amp          {deferred} updated threads keep their earlier rows: the usage report "
+              "is limited to 60 an hour; run again later to read them")
+    if missing := sum(r["state"] == "no_report" for r in state.values()):
         print(f"amp          {missing} threads without cost or subagent usage: the usage report "
               "is limited to 60 an hour; run again later to fill them in")
-    # Threads still missing their report stay out of the state, so the next run retries them.
-    state = {t["id"]: t["updated"] for t in threads
-             if t["id"] in done or (t["id"] not in todo and t["id"] in seen)}
 
     def save():
         state_file.write_text(json.dumps(state, indent=1))

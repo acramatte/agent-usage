@@ -241,7 +241,8 @@ def test_amp_thread_events(capsys):
 
 def test_amp_ingest_retries_rate_limited_threads(tmp_path, monkeypatch):
     thread, usage = amp_fixture()
-    listed = [{"id": "T-1", "updated": "u1"}, {"id": "T-2", "updated": "u1"}]
+    # T-E has no messages, so no events.
+    listed = [{"id": t, "updated": "u1"} for t in ("T-1", "T-2", "T-E")]
     calls, limit = [], {"T-2"}
 
     def fake(*args):
@@ -249,7 +250,7 @@ def test_amp_ingest_retries_rate_limited_threads(tmp_path, monkeypatch):
         if args[:2] == ("threads", "list"):
             return json.dumps(listed)
         if args[1] == "export":
-            return json.dumps(thread | {"id": args[-1]})
+            return json.dumps({"id": "T-E", "messages": []} if args[-1] == "T-E" else thread | {"id": args[-1]})
         if args[-1] in limit:
             raise amp.RateLimited("Usage information is limited to 60 requests per hour.")
         return usage
@@ -265,13 +266,32 @@ def test_amp_ingest_retries_rate_limited_threads(tmp_path, monkeypatch):
         return {c[2] for c in calls if c[1] == "export"}, dict(duckdb.sql(
             f"select session_id, count(*) from '{dest}' group by 1").fetchall())
 
-    # T-2 is ingested without its report, and fetched again next run; T-1 is not.
-    assert run() == ({"T-1", "T-2"}, {"T-1": 8, "T-2": 5})
+    def cost(tid):
+        return duckdb.sql(f"select round(sum(cost_usd), 6) from '{data}/events-ampcode.parquet' "
+                          f"where session_id = '{tid}'").fetchall()[0][0]
+
+    # T-2 hits the limit: it and T-E after it are ingested without their reports,
+    # and fetched again next run; T-1 is not. Once read, T-E is not fetched
+    # again, though it has no rows.
+    assert run() == ({"T-1", "T-2", "T-E"}, {"T-1": 8, "T-2": 5})
+    assert cost("T-2") is None
     limit.clear()
-    assert run() == ({"T-2"}, {"T-1": 8, "T-2": 8})
+    assert run() == ({"T-2", "T-E"}, {"T-1": 8, "T-2": 8})
     assert run() == (set(), {"T-1": 8, "T-2": 8})
     listed[0]["updated"] = "u2"
     assert run()[0] == {"T-1"}
+    # Updated again while the report is limited: T-1 keeps its costed rows, and
+    # is read again once the report is back.
+    full = cost("T-1")
+    listed[0]["updated"], limit = "u3", {"T-1"}
+    assert run() == ({"T-1"}, {"T-1": 8, "T-2": 8})
+    assert cost("T-1") == full
+    limit.clear()
+    assert run()[0] == {"T-1"}
+    assert run()[0] == set()
+    # A newer parser reads every thread again.
+    monkeypatch.setattr(amp, "PARSER", amp.PARSER + 1)
+    assert run()[0] == {"T-1", "T-2", "T-E"}
 
 
 def test_amp_tool_call_counted_once_with_its_first_result():

@@ -64,12 +64,15 @@ new or updated since the last run `amp threads export` (messages) and
 - Tools: `tool_use` / `tool_result`, errors from the run status; duration is up to the
   message carrying the turn's results, an upper bound when tools ran in parallel.
 - Skills: the `skill` tool.
-- The usage report is limited to 60 threads an hour. Threads over the limit are ingested
+- The usage report is limited to 60 threads an hour. New threads over the limit are ingested
   without cost and retried on the next run, so a first backfill takes one run per 60 threads.
+  An updated thread over the limit keeps its earlier rows, with cost, until a later run reads it.
 - Each thread's model calls are checked against the report's token totals; a mismatch, or a
   usage report or export in an unexpected shape, prints a warning with the thread ID to stderr.
-  Unreadable threads are skipped and retried next run. Threads are only re-read when they
-  change, so after a parser fix delete `amp-threads.json` in the data dir to re-read them all.
+  Unreadable threads are skipped and retried next run.
+- `amp-threads.json` in the data dir records each thread's state: `complete`, or `no_report`
+  (no cost yet, retried). Threads are re-read when they change, or all of them when a new
+  version parses threads differently (`PARSER` in `amp.py`; bump it with any parser fix).
 
 ## Schema (`events-*.parquet`)
 
