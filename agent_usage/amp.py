@@ -247,6 +247,21 @@ def thread_state(record, listed):
     return record["state"]
 
 
+def load_records(state_file):
+    """amp-threads.json as {thread id: record}."""
+    saved = json.loads(state_file.read_text()) if state_file.exists() else {}
+    # Before records, the file kept each complete thread's `updated` only.
+    return {tid: r if isinstance(r, dict) else dict(updated=r, state="complete", parser=1)
+            for tid, r in saved.items()}
+
+
+def mark_stale(state_file):
+    """Have every recorded thread read again, keeping its rows (and cost) until
+    it is: for records that may not match the events file next to them."""
+    records = load_records(state_file)
+    state_file.write_text(json.dumps({tid: r | dict(parser=0) for tid, r in records.items()}, indent=1))
+
+
 def collect(data_dir, have_events):
     """Events for every thread not `complete`, and the state to save once they
     are written. amp-threads.json keeps one record per thread: {updated, state,
@@ -255,10 +270,7 @@ def collect(data_dir, have_events):
     if not shutil.which("amp"):
         raise SystemExit("ingest --amp needs the amp CLI: https://ampcode.com/manual")
     state_file = Path(data_dir) / "amp-threads.json"
-    saved = json.loads(state_file.read_text()) if state_file.exists() and have_events else {}
-    # Before records, the file kept each complete thread's `updated` only.
-    records = {tid: r if isinstance(r, dict) else dict(updated=r, state="complete", parser=1)
-               for tid, r in saved.items()}
+    records = load_records(state_file) if have_events else {}
     threads = list_threads()
     states = {t["id"]: thread_state(records.get(t["id"]), t) for t in threads}
     todo = [t for t in threads if states[t["id"]] != "complete"]

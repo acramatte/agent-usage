@@ -107,8 +107,14 @@ machine's local files with the pushed copies, which can only be older; if they a
 missing (a reinstall under the same hostname) it restores them, so the next
 `ingest` keeps the sessions pruned since.
 
-The machine that runs `ingest --amp` treats `events-ampcode.parquet` as its own: it
-pushes it and never pulls it; the others pull it like any other machine's.
+One machine owns `events-ampcode.parquet`: it pushes it, with the `amp-threads.json` that
+records what it holds, and never pulls it; the others pull it like any other machine's. The
+first machine that runs `ingest --amp` and then `sync` becomes the owner, recorded in the
+dataset's `owners.json`. Another machine that runs `ingest --amp` does not push its copy
+(`sync` says so). `sync --take-over` makes any machine the owner: it adopts the previous
+owner's events and `amp-threads.json`, so the next `ingest --amp` continues where that one
+stopped. (When the previous owner never pushed `amp-threads.json`, every thread is read again;
+each keeps its rows and cost until it is.)
 
 `sync` refuses a dataset that is public; pass `--allow-public` to override.
 
