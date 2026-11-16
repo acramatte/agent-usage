@@ -119,7 +119,7 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
     <div class="head">
       <h2>Models</h2>
       <div class="seg" id="modelsBy" role="group" aria-label="Group models">
-        <button data-by="h" aria-pressed="true">By harness</button><button data-by="">By model</button>
+        <button data-by="" aria-pressed="true">By model</button><button data-by="h">By harness</button>
       </div>
     </div>
     <p class="sub" id="modelsSub"></p>
@@ -161,7 +161,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [], nr: r[14] || 0 }));
 // Session: [day it was active, machine, harness, session number]
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2], id: s[3] }));
-const state = { days: 0, h: "", m: "", modelsBy: "h", all: { tools: false, skills: false } };
+const state = { days: 0, h: "", m: "", modelsBy: "", all: { tools: false, skills: false } };
 
 function fillSelect(id, values) {
   const s = $(id); s.append(el("option", { value: "" }, "All"));
