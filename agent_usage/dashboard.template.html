@@ -69,6 +69,10 @@ td { font-variant-numeric: tabular-nums; }
 td .key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 8px; }
 .barcell { width: 28%; min-width: 120px; }
 .minibar { height: 10px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.stack { display: flex; gap: 1px; overflow: hidden; }
+.stack span { height: 100%; }
+.head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.head .seg button { padding: 3px 10px; font-size: 12px; }
 .muted { color: var(--text-muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--grid); color: var(--text-secondary); }
@@ -112,8 +116,13 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
   </section>
 
   <section class="card">
-    <h2>Models</h2>
-    <p class="sub">Tokens, cache hits and spend per model. Bars show share of total tokens.</p>
+    <div class="head">
+      <h2>Models</h2>
+      <div class="seg" id="modelsBy" role="group" aria-label="Group models">
+        <button data-by="h" aria-pressed="true">By harness</button><button data-by="">By model</button>
+      </div>
+    </div>
+    <p class="sub" id="modelsSub"></p>
     <div class="scroll" id="models"></div>
     <p class="note">Spend is only what each harness reports. Codex reports none, and models on a subscription (OAuth) report $0.
       Claude Code sessions without a cost record are estimated from your other sessions' rates and marked “est.”</p>
@@ -152,7 +161,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS("http://
 const R = DATA.agg.map(r => ({ day: r[0], m: r[1], h: r[2], t: r[3], k: r[4], n: r[5], i: r[6], o: r[7], cr: r[8], cw: r[9], c: r[10], ce: r[11], e: r[12], du: r[13] || [], nr: r[14] || 0 }));
 // Session: [day it was active, machine, harness, session number]
 const S = DATA.sessions.map(s => ({ day: s[0], m: s[1], h: s[2], id: s[3] }));
-const state = { days: 0, h: "", m: "", all: { tools: false, skills: false } };
+const state = { days: 0, h: "", m: "", modelsBy: "h", all: { tools: false, skills: false } };
 
 function fillSelect(id, values) {
   const s = $(id); s.append(el("option", { value: "" }, "All"));
@@ -165,6 +174,7 @@ for (const b of $("range").querySelectorAll("button")) b.onclick = () => {
   for (const x of $("range").querySelectorAll("button")) x.setAttribute("aria-pressed", x === b);
   state.days = +b.dataset.d; render();
 };
+for (const b of $("modelsBy").querySelectorAll("button")) b.onclick = () => { state.modelsBy = b.dataset.by; render(); };
 const days = [...new Set(R.map(r => r.day))].sort();
 $("meta").textContent = `${days.length ? `${days[0]} → ${days.at(-1)}` : "No events"} · ${new Set(R.map(r => r.m)).size} machine(s) · built ${DATA.built.replace("T", " ")}`;
 
@@ -333,17 +343,45 @@ const q = (sorted, p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math
 const dur = ms => ms == null ? "—" : ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 1e4 ? 1 : 0) + " s";
 
 function models(rows) {
-  const g = group(rows, "model_call").map(a => ({ ...a, tok: a.i + a.o + a.cr + a.cw })).sort((a, b) => b.tok - a.tok);
+  const byH = state.modelsBy === "h";
+  $("modelsSub").textContent = byH
+    ? "Tokens, cache hits and spend per model and harness: a model used in several harnesses has a row for each. Bars compare total tokens."
+    : "Tokens, cache hits and spend per model, summed across harnesses. Bars compare total tokens, split by harness.";
+  for (const b of $("modelsBy").querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.by === state.modelsBy);
+  const per = group(rows, "model_call").map(a => ({ ...a, tok: a.i + a.o + a.cr + a.cw }));
+  // Each row keeps its per-harness parts; by harness, a row is its only part.
+  let g = per.map(a => ({ ...a, parts: [a] }));
+  if (!byH) {
+    const m = new Map();
+    for (const a of per) {
+      const s = m.get(a.k) || m.set(a.k, { k: a.k, n: 0, i: 0, o: 0, cr: 0, cw: 0, c: 0, ce: 0, tok: 0, parts: [] }).get(a.k);
+      for (const f of ["n", "i", "o", "cr", "cw", "c", "ce", "tok"]) s[f] += a[f];
+      s.parts.push(a);
+    }
+    g = [...m.values()];
+    for (const s of g) s.parts.sort((x, y) => HARNESSES.indexOf(x.h) - HARNESSES.indexOf(y.h));
+  }
+  g.sort((a, b) => b.tok - a.tok);
   const max = Math.max(1, ...g.map(a => a.tok));
+  const noSpend = a => a.parts.every(p => p.h === "codex");  // Codex reports no cost
   table("models", ["Model", "Calls", "Input", "Output", "Cache read", "Cache hit", "Spend", "Tokens"],
     g.map(a => {
       const inTot = a.i + a.cr + a.cw;
-      const spend = a.h === "codex" ? "—" : usd(a.c) + (a.ce > a.c / 2 && a.c > 0 ? " est." : "");
-      return [keyed(a.h, a.k), fmt(a.n), fmt(a.i), fmt(a.o), fmt(a.cr), inTot ? pct(a.cr / inTot) : "—", spend,
-        bar(a.h, a.tok / max, a.k, [[col(a.h), a.h, ""], [null, "Tokens", fmt(a.tok)], [null, "Calls", fmt(a.n)], [null, "Spend", spend]])];
+      const spend = noSpend(a) ? "—" : usd(a.c) + (a.ce > a.c / 2 && a.c > 0 ? " est." : "");
+      const name = el("span");
+      a.parts.forEach((p, i) => { const k = el("span", { class: "key" }); k.style.background = col(p.h); if (i < a.parts.length - 1) k.style.marginRight = "3px"; name.append(k); });
+      name.append(document.createTextNode(a.k));
+      if (byH) name.append(el("span", { class: "muted" }, " · " + a.h));
+      const tipRows = [...a.parts.map(p => [col(p.h), p.h, byH ? "" : fmt(p.tok)]), [null, "Tokens", fmt(a.tok)], [null, "Calls", fmt(a.n)], [null, "Spend", spend]];
+      const b = bar(a.parts[0].h, a.tok / max, a.k, tipRows);
+      if (a.parts.length > 1) {
+        b.classList.add("stack"); b.style.background = "none";
+        for (const p of a.parts) { const s = el("span"); s.style.flex = `${p.tok} 0 0`; s.style.background = col(p.h); b.append(s); }
+      }
+      return [name, fmt(a.n), fmt(a.i), fmt(a.o), fmt(a.cr), inTot ? pct(a.cr / inTot) : "—", spend, b];
     }), { left: [0], keys: g.map(a => {
       const inTot = a.i + a.cr + a.cw;
-      return [a.k, a.n, a.i, a.o, a.cr, inTot ? a.cr / inTot : null, a.h === "codex" ? null : a.c, a.tok];
+      return [a.k, a.n, a.i, a.o, a.cr, inTot ? a.cr / inTot : null, noSpend(a) ? null : a.c, a.tok];
     }) });
   const last = $("models").querySelectorAll("th, td"); last.forEach((c, i) => { if (c.cellIndex === 7) c.classList.add("barcell", "t"); });
 }
