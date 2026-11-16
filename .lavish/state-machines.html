@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Implicit state machines · agent-usage</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f5f5f3; --surface-1: #fcfcfb; --grid: #e6e5e0; --hover: #f0efec;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --s1: #2a78d6; --s2: #d97757; --s3: #1baf7a; --s4: #7c5cdb; --s6: #b8860b;
+  --critical: #d03b3b;
+  --bad-bg: #fbeaea; --good-bg: #e6f6ef; --warn-bg: #fbf3df; --blue-bg: #e8f0fb; --violet-bg: #efeafb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --grid: #2c2c2a; --hover: #262624;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --s1: #3987e5; --s2: #d97757; --s3: #22b882; --s4: #9479e8; --s6: #d4a72c;
+    --critical: #ec5b5b;
+    --bad-bg: #3a1d1d; --good-bg: #16332a; --warn-bg: #352c14; --blue-bg: #18273b; --violet-bg: #261f3d;
+  }
+}
+* { box-sizing: border-box; }
+html, body { background: var(--surface-0); }
+body { margin: 0; color: var(--text-primary); font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 32px 18px 80px; }
+h1 { font-size: 28px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+h2 { font-size: 21px; margin: 0; font-weight: 650; }
+.sub { color: var(--text-secondary); margin: 4px 0 0; }
+code, .mono { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+a { color: var(--s1); }
+
+.score { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 22px 0 8px; }
+.score a { text-decoration: none; color: inherit; }
+.tile { background: var(--surface-1); border: 1px solid var(--grid); border-radius: 14px; padding: 14px 16px; min-width: 0; height: 100%; }
+.tile .n { font-size: 34px; font-weight: 700; line-height: 1; color: var(--text-muted); }
+.tile .t { font-weight: 600; margin-top: 8px; }
+.tile .w { color: var(--text-muted); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
+.chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; margin-top: 10px; }
+.chip.bad { background: var(--bad-bg); color: var(--critical); }
+.chip.warn { background: var(--warn-bg); color: var(--s6); }
+.chip.good { background: var(--good-bg); color: var(--s3); }
+
+section.sm { margin-top: 44px; }
+.head { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+.head .num { font-size: 15px; font-weight: 700; color: var(--surface-1); background: var(--text-primary); border-radius: 8px; padding: 1px 9px; }
+.head .where { color: var(--text-muted); font-size: 13px; }
+.ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+.pane { background: var(--surface-1); border: 1px solid var(--grid); border-radius: 14px; padding: 12px 14px 14px; min-width: 0; }
+.pane .lab { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.pane.before .lab { color: var(--critical); }
+.pane.after .lab { color: var(--s3); }
+.pane svg { width: 100%; height: auto; display: block; margin-top: 6px; }
+.gains { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.gain { background: var(--good-bg); color: var(--text-primary); border-radius: 10px; padding: 6px 12px; font-size: 13.5px; }
+.gain b { color: var(--s3); }
+.cost { background: var(--warn-bg); border-radius: 10px; padding: 6px 12px; font-size: 13.5px; }
+.cost b { color: var(--s6); }
+.q { background: var(--blue-bg); border-radius: 10px; padding: 6px 12px; font-size: 13.5px; }
+.q b { color: var(--s1); }
+.ev { margin-top: 10px; background: var(--surface-1); border: 1px solid var(--grid); border-left: 4px solid var(--critical); border-radius: 10px; padding: 8px 12px; overflow-x: auto; }
+.ev .mono { white-space: pre; display: block; color: var(--text-secondary); }
+.ev .mono b { color: var(--critical); font-weight: 600; }
+.ev .cap { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.ev .cap code { overflow-wrap: anywhere; }
+
+/* SVG */
+svg text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.node rect { fill: var(--surface-0); stroke: var(--text-secondary); stroke-width: 1.6; }
+.node.implicit rect { stroke-dasharray: 6 5; fill: none; }
+.node.good rect { stroke: var(--s3); fill: var(--good-bg); }
+.node.bad rect { stroke: var(--critical); fill: var(--bad-bg); }
+.node .nm { fill: var(--text-primary); font-size: 15px; font-weight: 650; text-anchor: middle; }
+.node .ds { fill: var(--text-muted); font-size: 11.5px; text-anchor: middle; }
+.e { fill: none; stroke: var(--text-secondary); stroke-width: 1.6; marker-end: url(#ah); }
+.e.bad { stroke: var(--critical); stroke-width: 2.2; marker-end: url(#ah-bad); }
+.e.good { stroke: var(--s3); stroke-width: 2.2; marker-end: url(#ah-good); }
+.e.dash { stroke-dasharray: 5 4; }
+.el { fill: var(--text-secondary); font-size: 12px; }
+.el.bad { fill: var(--critical); font-weight: 600; }
+.el.good { fill: var(--s3); font-weight: 600; }
+.el.mut { fill: var(--text-muted); font-size: 11.5px; }
+.mid { text-anchor: middle; }
+.end { text-anchor: end; }
+.file rect { fill: var(--surface-0); stroke: var(--text-muted); stroke-width: 1.3; }
+.file text { fill: var(--text-primary); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+.file.gone rect { stroke-dasharray: 4 4; fill: none; }
+.file.gone text { fill: var(--text-muted); text-decoration: line-through; }
+.row rect { stroke-width: 1.5; }
+.row.ok rect { fill: var(--blue-bg); stroke: var(--s1); }
+.row.lost rect { fill: var(--bad-bg); stroke: var(--critical); stroke-dasharray: 5 4; }
+.row.kept rect { fill: var(--good-bg); stroke: var(--s3); }
+.row text { font-size: 12.5px; fill: var(--text-primary); }
+.row .tag { font-weight: 700; font-size: 12px; }
+.row.lost .tag { fill: var(--critical); }
+.row.kept .tag { fill: var(--s3); }
+.row.ok .tag { fill: var(--s1); }
+.box rect { fill: var(--surface-0); stroke: var(--grid); stroke-width: 1.5; }
+.pc { fill: var(--text-primary); font-size: 14px; font-weight: 650; }
+
+/* heat table */
+.heat { width: 100%; border-collapse: separate; border-spacing: 4px; margin-top: 6px; font-size: 13.5px; }
+.heat th { color: var(--text-secondary); font-weight: 500; text-align: left; padding: 4px 6px; font-size: 12.5px; }
+.heat td { padding: 9px 8px; border-radius: 8px; text-align: center; font-weight: 600; }
+.heat td:first-child { text-align: left; font-weight: 600; background: none; }
+.c-first { background: var(--blue-bg); color: var(--s1); }
+.c-last { background: var(--violet-bg); color: var(--s4); }
+.c-bad { background: var(--bad-bg); color: var(--critical); }
+.heatnote { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; }
+.formula { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--surface-0); font-size: 14px; }
+.formula b { color: var(--critical); }
+
+.skip { margin-top: 44px; }
+.skip .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.skip .c { border: 1px solid var(--grid); background: var(--surface-1); border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--text-secondary); }
+.skip .c b { color: var(--text-primary); font-weight: 600; }
+
+form.decide { margin-top: 44px; background: var(--surface-1); border: 1px solid var(--grid); border-radius: 14px; padding: 16px; }
+form.decide .r { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr); gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--grid); }
+form.decide .r:first-of-type { border-top: 0; }
+form.decide .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+form.decide label.o { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--grid); border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: 13.5px; }
+form.decide label.o:has(input:checked) { border-color: var(--text-primary); background: var(--hover); font-weight: 600; }
+form.decide .go { margin-top: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+form.decide button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 9px 16px; background: var(--text-primary); color: var(--surface-1); cursor: pointer; }
+form.decide .status { color: var(--text-muted); font-size: 13px; }
+textarea { width: 100%; font: inherit; border: 1px solid var(--grid); border-radius: 10px; padding: 8px 10px; background: var(--surface-0); color: var(--text-primary); margin-top: 10px; }
+
+@media (max-width: 900px) {
+  .ba { grid-template-columns: minmax(0, 1fr); }
+  .score { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  form.decide .r { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-secondary)"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--critical)"/></marker>
+    <marker id="ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+</svg>
+<main>
+  <h1>Implicit state machines in agent-usage</h1>
+  <p class="sub">4 found, 3 with bugs reproduced against <code>1f7d7b2</code>. Dashed = inferred state · <span style="color:var(--critical)">red</span> = bug · <span style="color:var(--s3)">green</span> = fixed.</p>
+
+  <div class="score">
+    <a href="#sm1"><div class="tile" id="tile-1"><div class="n">1</div><div class="t">Amp thread sync</div><div class="w">amp.py · collect()</div><span class="chip bad">2 bugs reproduced</span></div></a>
+    <a href="#sm2"><div class="tile" id="tile-2"><div class="n">2</div><div class="t">Session merge</div><div class="w">ingest.py · write()</div><span class="chip bad">row loss reproduced</span></div></a>
+    <a href="#sm3"><div class="tile" id="tile-3"><div class="n">3</div><div class="t">Tool-call lifecycle ×5</div><div class="w">every adapter</div><span class="chip warn">skewed error rate</span></div></a>
+    <a href="#sm4"><div class="tile" id="tile-4"><div class="n">4</div><div class="t">Sync file ownership</div><div class="w">cli.py · own_files()</div><span class="chip warn">hazard</span></div></a>
+  </div>
+
+  <!-- ============================================================ 1 -->
+  <section class="sm" id="sm1">
+    <div class="head"><span class="num">1</span><h2>Amp thread sync</h2>
+      <span class="where"><a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/amp.py#L227-L265">amp.py L227–265</a> · state is split across 3 places</span></div>
+    <div class="ba">
+      <div class="pane before" id="sm1-before"><div class="lab">Before · inferred</div>
+        <svg viewBox="0 0 640 360" role="img" aria-label="Amp thread states today">
+          <g class="node implicit" id="sm1b-unseen"><title>unseen: thread id not in events-ampcode.parquet</title>
+            <rect x="20" y="150" width="140" height="56" rx="10"/><text class="nm" x="90" y="175">unseen</text><text class="ds" x="90" y="193">not in parquet</text></g>
+          <g class="node implicit" id="sm1b-costed"><title>costed: in parquet and amp-threads.json</title>
+            <rect x="380" y="40" width="150" height="56" rx="10"/><text class="nm" x="455" y="65">costed</text><text class="ds" x="455" y="83">parquet + json</text></g>
+          <g class="node implicit" id="sm1b-nocost"><title>no cost: in parquet, missing from json</title>
+            <rect x="380" y="262" width="150" height="56" rx="10"/><text class="nm" x="455" y="287">no cost</text><text class="ds" x="455" y="305">parquet only</text></g>
+          <path class="e" d="M160,165 C260,150 300,90 378,72"/>
+          <text class="el" x="176" y="128">report ok</text>
+          <path class="e" d="M160,192 C260,210 300,270 378,286"/>
+          <text class="el" x="180" y="250">rate-limited</text>
+          <path class="e" d="M420,262 L420,98"/>
+          <text class="el end" x="412" y="184">retry</text>
+          <path class="e bad" id="sm1b-lose" d="M495,98 L495,260"><title>bug: updated thread + rate limit replaces costed rows with cost-less ones</title></path>
+          <text class="el bad" x="505" y="160">updated +</text>
+          <text class="el bad" x="505" y="176">rate-limited:</text>
+          <text class="el bad" x="505" y="192">$0.171 → null</text>
+          <path class="e bad" id="sm1b-loop" d="M60,150 C30,80 150,80 120,150"><title>bug: a thread with 0 events never reaches parquet, so it is exported and its usage report fetched every run</title></path>
+          <text class="el bad mid" x="90" y="62">0 events → refetch</text>
+          <text class="el bad mid" x="90" y="78">every run</text>
+          <text class="el bad mid" x="90" y="236">parser fix →</text>
+          <text class="el bad mid" x="90" y="252">rm json by hand</text>
+          <text class="el mut" x="20" y="348">state = parquet ∋ id · json[id] == updated · done/limited in memory</text>
+        </svg>
+      </div>
+      <div class="pane after" id="sm1-after"><div class="lab">After · one record per thread</div>
+        <svg viewBox="0 0 640 360" role="img" aria-label="Amp thread states made explicit">
+          <g class="node" id="sm1a-unseen"><title>unseen</title><rect x="20" y="150" width="130" height="56" rx="10"/><text class="nm" x="85" y="183">unseen</text></g>
+          <g class="node" id="sm1a-stale"><title>stale: updated since last fetch, or parser version bumped</title><rect x="220" y="62" width="130" height="56" rx="10"/><text class="nm" x="285" y="95">stale</text></g>
+          <g class="node good" id="sm1a-complete"><title>complete</title><rect x="470" y="62" width="150" height="56" rx="10"/><text class="nm" x="545" y="95">complete</text></g>
+          <g class="node" id="sm1a-noreport"><title>no_report: ingested without cost, retried</title><rect x="470" y="262" width="150" height="56" rx="10"/><text class="nm" x="545" y="295">no_report</text></g>
+          <path class="e" d="M468,80 L352,80"/>
+          <text class="el mid" x="410" y="72" style="font-size:11px">updated · parser++</text>
+          <path class="e" d="M352,104 L468,104"/>
+          <text class="el mid" x="410" y="122" style="font-size:11px">report ok</text>
+          <path class="e good" id="sm1a-defer" d="M260,62 C240,8 330,8 310,62"><title>rate-limited stale thread: skip it, keep its costed rows</title></path>
+          <text class="el good mid" x="285" y="16">limited: skip, keep rows</text>
+          <path class="e" d="M150,170 C300,170 420,160 480,120"/>
+          <text class="el" x="240" y="160">report ok</text>
+          <path class="e" d="M150,195 C300,230 380,285 468,290"/>
+          <text class="el" x="268" y="268">limited</text>
+          <path class="e" d="M545,262 L545,120"/>
+          <text class="el" x="553" y="196">retry</text>
+          <g class="box"><rect x="20" y="318" width="420" height="34" rx="8"/></g>
+          <text class="mono" x="32" y="340" style="font-size:12px;fill:var(--text-primary)">amp-threads.json: id → {updated, state, parser}</text>
+          <text class="el good" x="20" y="240">0 events = complete</text>
+        </svg>
+      </div>
+    </div>
+    <div class="ev"><div class="cap">Reproduced with a fake <code>amp</code> CLI (T-E is a thread with no messages) · now covered by <code>tests/test_ingest.py::test_amp_ingest_retries_rate_limited_threads</code></div>
+<span class="mono">run 1:  exports=[T-1, T-E]  reports=[T-1, T-E]  T-1 cost=0.171
+run 2:  exports=[<b>T-E</b>]        reports=[<b>T-E</b>]        T-1 cost=0.171   ← nothing changed
+run 3:  exports=[<b>T-E</b>]        reports=[<b>T-E</b>]        T-1 cost=0.171   ← nothing changed
+run 4:  T-1 updated, report rate-limited             T-1 cost=<b>None</b></span></div>
+    <div class="gains">
+      <span class="gain"><b>Quota</b> stops leaking: each empty thread burns 1 of 60 reports/hour, every run</span>
+      <span class="gain"><b>Spend</b> never drops when a thread changes</span>
+      <span class="gain"><b>Parser fix</b> = bump a constant, not “delete amp-threads.json”</span>
+      <span class="gain"><b>Status line</b>: “12 threads still missing cost” across runs</span>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section class="sm" id="sm2">
+    <div class="head"><span class="num">2</span><h2>Session merge: live vs pruned</h2>
+      <span class="where"><a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/ingest.py#L516-L557">ingest.py L516–557</a> · unit of replacement = whole session</span></div>
+    <div class="ba">
+      <div class="pane before" id="sm2-before"><div class="lab">Before · session is live if any row is fresh</div>
+        <svg viewBox="0 0 640 330" role="img" aria-label="Partial prune loses rows today">
+          <text class="pc" x="20" y="28">disk</text><text class="pc" x="420" y="28">events.parquet</text>
+          <text class="el mut" x="20" y="74">run 1</text>
+          <g class="file"><rect x="70" y="52" width="110" height="36" rx="6"/><text x="125" y="75">S.jsonl</text></g>
+          <g class="file"><rect x="192" y="52" width="170" height="36" rx="6"/><text x="277" y="75">subagents/agent-1</text></g>
+          <path class="e" d="M370,70 L412,70"/>
+          <g class="row ok"><rect x="420" y="44" width="200" height="26" rx="6"/><text x="432" y="62">S · main</text></g>
+          <g class="row ok"><rect x="420" y="76" width="200" height="26" rx="6"/><text x="432" y="94">S · subagent</text></g>
+          <line x1="20" x2="620" y1="134" y2="134" stroke="var(--grid)"/>
+          <text class="el mut" x="20" y="194">run 2</text>
+          <g class="file"><rect x="70" y="172" width="110" height="36" rx="6"/><text x="125" y="195">S.jsonl</text></g>
+          <g class="file gone"><rect x="192" y="172" width="170" height="36" rx="6"/><text x="277" y="195">subagents/agent-1</text></g>
+          <text class="el mut mid" x="277" y="228">pruned</text>
+          <path class="e bad" d="M370,190 L412,190"/>
+          <g class="row ok"><rect x="420" y="164" width="200" height="26" rx="6"/><text x="432" y="182">S · main</text><text class="tag" x="608" y="182" text-anchor="end">replaced</text></g>
+          <g class="row lost" id="sm2b-lost"><title>bug: S has a fresh row, so every stored S row is replaced, and the subagent row is gone</title><rect x="420" y="196" width="200" height="26" rx="6"/><text x="432" y="214">S · subagent</text><text class="tag" x="608" y="214" text-anchor="end">lost</text></g>
+          <text class="el bad end" x="620" y="252">S has a fresh row → all old S rows dropped</text>
+          <text class="el mut" x="20" y="300">implicit: live = “session_id in fresh” · pruned = “not in fresh” → kept</text>
+          <text class="el mut" x="20" y="318">same rule makes no-cost Amp rows replace costed ones (#1)</text>
+        </svg>
+      </div>
+      <div class="pane after" id="sm2-after"><div class="lab">After · per-event state</div>
+        <svg viewBox="0 0 640 330" role="img" aria-label="Per-event merge keeps rows">
+          <text class="pc" x="20" y="28">disk</text><text class="pc" x="420" y="28">events.parquet</text>
+          <text class="el mut" x="20" y="74">run 1</text>
+          <g class="file"><rect x="70" y="52" width="110" height="36" rx="6"/><text x="125" y="75">S.jsonl</text></g>
+          <g class="file"><rect x="192" y="52" width="170" height="36" rx="6"/><text x="277" y="75">subagents/agent-1</text></g>
+          <path class="e" d="M370,70 L412,70"/>
+          <g class="row ok"><rect x="420" y="44" width="200" height="26" rx="6"/><text x="432" y="62">msg_1 · main</text></g>
+          <g class="row ok"><rect x="420" y="76" width="200" height="26" rx="6"/><text x="432" y="94">msg_2 · subagent</text></g>
+          <line x1="20" x2="620" y1="134" y2="134" stroke="var(--grid)"/>
+          <text class="el mut" x="20" y="194">run 2</text>
+          <g class="file"><rect x="70" y="172" width="110" height="36" rx="6"/><text x="125" y="195">S.jsonl</text></g>
+          <g class="file gone"><rect x="192" y="172" width="170" height="36" rx="6"/><text x="277" y="195">subagents/agent-1</text></g>
+          <text class="el mut mid" x="277" y="228">pruned</text>
+          <path class="e good" d="M370,190 L412,190"/>
+          <g class="row ok"><rect x="420" y="164" width="200" height="26" rx="6"/><text x="432" y="182">msg_1 · main</text><text class="tag" x="608" y="182" text-anchor="end">live</text></g>
+          <g class="row kept" id="sm2a-kept"><title>retained: its event id is not in this run, so the stored row stays</title><rect x="420" y="196" width="200" height="26" rx="6"/><text x="432" y="214">msg_2 · subagent</text><text class="tag" x="608" y="214" text-anchor="end">retained</text></g>
+          <text class="el good" x="420" y="252">upsert by event_id</text>
+          <g class="box"><rect x="20" y="270" width="600" height="52" rx="8"/></g>
+          <text class="mono" x="32" y="292" style="font-size:12px;fill:var(--text-primary)">claude-code   1,204 live · 3,418 retained</text>
+          <text class="el bad" x="32" y="312">live 1,204 → 0 in one run ⇒ warn: adapter broke, not pruning</text>
+        </svg>
+      </div>
+    </div>
+    <div class="ev"><div class="cap">Reproduced: one session, main + subagent file, then only the subagent file deleted · now covered by <code>tests/test_ingest.py::test_rows_of_a_pruned_subagent_file_are_kept_and_costed_with_their_session</code></div>
+<span class="mono">run 1                     rows for S: main=1  subagent=1
+run 2 (agent-1 pruned)    rows for S: main=1  subagent=<b>0</b></span></div>
+    <div class="gains">
+      <span class="gain"><b>No row loss</b> when files of one session age out at different times</span>
+      <span class="gain"><b>Adapter breakage</b> visible instead of silently “pruned”</span>
+      <span class="cost"><b>Cost</b>: new <code>event_id</code> column; Amp/Claude aggregate rows need a stable key</span>
+      <span class="q" id="sm2-question"><b>Unverified</b>: does Claude Code prune <code>subagents/</code> files apart from the main one? Resumed sessions make it plausible.</span>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section class="sm" id="sm3">
+    <div class="head"><span class="num">3</span><h2>Tool-call lifecycle, written 5 times</h2>
+      <span class="where">ingest.py <a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/ingest.py#L135-L163">L135</a> · <a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/ingest.py#L256-L276">L256</a> · <a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/ingest.py#L318-L334">L318</a> · <a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/ingest.py#L377-L413">L377</a> · amp.py <a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/amp.py#L153-L165">L153</a></span></div>
+    <div class="ba">
+      <div class="pane before" id="sm3-before"><div class="lab">Before · 5 dicts, 5 rule sets</div>
+        <table class="heat" aria-label="How each adapter handles tool-call edge cases">
+          <thead><tr><th></th><th>same call twice</th><th>result twice</th><th>no result</th></tr></thead>
+          <tbody>
+            <tr id="sm3-claude"><td>Claude Code</td><td class="c-first">first</td><td class="c-last">last</td><td class="c-bad">= success</td></tr>
+            <tr id="sm3-codex"><td>Codex</td><td class="c-last">last · skill ×2</td><td class="c-last">last</td><td class="c-bad">= success</td></tr>
+            <tr id="sm3-pi"><td>pi / OMP</td><td class="c-last">last · skill ×2</td><td class="c-last">last</td><td class="c-bad">= success</td></tr>
+            <tr id="sm3-hermes"><td>Hermes</td><td class="c-first">first</td><td class="c-first">first</td><td class="c-bad">= success</td></tr>
+            <tr id="sm3-amp"><td>Amp</td><td class="c-bad">counted ×2</td><td class="c-last">last</td><td class="c-bad">= success</td></tr>
+          </tbody>
+        </table>
+        <div class="formula" id="sm3-formula">Dashboard error rate = errors ÷ calls. A call with no result is <b>in calls, never in errors</b>, and has no duration.</div>
+        <div class="heatnote">Duplicates are latent outside Claude Code and Hermes, which already dedupe for a reason.</div>
+      </div>
+      <div class="pane after" id="sm3-after"><div class="lab">After · one ToolCalls tracker</div>
+        <svg viewBox="0 0 640 300" role="img" aria-label="Explicit tool call lifecycle">
+          <g class="node" id="sm3a-issued"><title>issued: first tool_use / function_call with this id; later copies ignored</title><rect x="20" y="112" width="130" height="56" rx="10"/><text class="nm" x="85" y="145">issued</text></g>
+          <g class="node implicit" id="sm3a-started"><title>started: optional, OMP tool_execution_start</title><rect x="220" y="112" width="130" height="56" rx="10"/><text class="nm" x="285" y="138">started</text><text class="ds" x="285" y="156">OMP only</text></g>
+          <g class="node good" id="sm3a-ok"><title>ok</title><rect x="460" y="20" width="150" height="50" rx="10"/><text class="nm" x="535" y="50">ok</text></g>
+          <g class="node bad" id="sm3a-err"><title>error</title><rect x="460" y="115" width="150" height="50" rx="10"/><text class="nm" x="535" y="145">error</text></g>
+          <g class="node" id="sm3a-none" style="--x:0"><title>no_result: file ended before a result; counted on its own</title><rect x="460" y="210" width="150" height="50" rx="10" style="stroke:var(--s6);stroke-width:2.2"/><text class="nm" x="535" y="240">no_result</text></g>
+          <path class="e dash" d="M150,140 L218,140"/>
+          <path class="e" d="M350,128 C400,100 410,60 458,48"/>
+          <path class="e" d="M350,140 L458,140"/>
+          <text class="el end" x="402" y="72">first result</text>
+          <path class="e good" d="M150,158 C250,250 360,240 458,236"/>
+          <text class="el good" x="200" y="242">file ends</text>
+          <text class="el mut" x="20" y="290">first call wins · first result wins · no_result shown as its own column</text>
+        </svg>
+      </div>
+    </div>
+    <div class="gains">
+      <span class="gain"><b>Error rate</b> honest: interrupted / crashed calls stop counting as success</span>
+      <span class="gain"><b>One rule</b> for duplicates in every adapter</span>
+      <span class="gain"><b>~40 lines</b> of copy-paste become one helper</span>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section class="sm" id="sm4">
+    <div class="head"><span class="num">4</span><h2>Sync: who owns events-ampcode</h2>
+      <span class="where"><a href="https://github.com/acramatte/agent-usage/blob/1f7d7b2/agent_usage/cli.py#L63-L82">cli.py L63–82</a> · owner = “has amp-threads.json”</span></div>
+    <div class="ba">
+      <div class="pane before" id="sm4-before"><div class="lab">Before · role inferred from a cursor file</div>
+        <svg viewBox="0 0 640 330" role="img" aria-label="Amp file ownership today">
+          <g class="node" id="sm4b-laptop"><title>laptop: runs ingest --amp</title><rect x="20" y="40" width="170" height="110" rx="12"/><text class="nm" x="105" y="66">laptop</text></g>
+          <g class="file"><rect x="34" y="80" width="142" height="26" rx="5"/><text x="105" y="98">amp-threads.json</text></g>
+          <g class="file"><rect x="34" y="112" width="142" height="26" rx="5"/><text x="105" y="130">events-ampcode</text></g>
+          <g class="node" id="sm4b-hf"><title>Hugging Face dataset</title><rect x="250" y="40" width="140" height="110" rx="12"/><text class="nm" x="320" y="88">dataset</text><text class="ds" x="320" y="108">HF</text></g>
+          <g class="node" id="sm4b-desk"><title>desk: another machine</title><rect x="450" y="40" width="170" height="110" rx="12"/><text class="nm" x="535" y="66">desk</text></g>
+          <path class="e" d="M190,80 L248,80"/><text class="el mid" x="219" y="72">push</text>
+          <path class="e" d="M450,110 L392,110"/><text class="el mid" x="421" y="128" style="font-size:11px">pull</text>
+          <path class="e bad" id="sm4b-flip" d="M250,130 C220,180 160,190 120,152"><title>after rm amp-threads.json, the laptop is no longer owner: sync pulls the remote copy over its newer local one and stops pushing</title></path>
+          <text class="el bad" x="20" y="200">rm amp-threads.json (README, after a parser fix)</text>
+          <text class="el bad" x="20" y="218">→ next sync pulls over the local copy, push stops</text>
+          <path class="e bad" id="sm4b-two" d="M535,152 C535,200 380,200 360,152"><title>desk runs ingest --amp once: it becomes a second owner; both push, last push wins</title></path>
+          <text class="el bad" x="410" y="250">desk runs ingest --amp once</text>
+          <text class="el bad" x="410" y="268">→ 2 owners, last push wins</text>
+          <text class="el mut" x="20" y="316">role = f(file name, exists(amp-threads.json), exists(local copy))</text>
+        </svg>
+      </div>
+      <div class="pane after" id="sm4-after"><div class="lab">After · ownership is data</div>
+        <svg viewBox="0 0 640 330" role="img" aria-label="Amp file ownership made explicit">
+          <g class="node" id="sm4a-laptop"><title>laptop</title><rect x="20" y="40" width="170" height="110" rx="12"/><text class="nm" x="105" y="66">laptop</text></g>
+          <g class="file"><rect x="34" y="80" width="142" height="26" rx="5"/><text x="105" y="98">amp-threads.json</text></g>
+          <g class="file"><rect x="34" y="112" width="142" height="26" rx="5"/><text x="105" y="130">events-ampcode</text></g>
+          <g class="node good" id="sm4a-hf"><title>dataset with owners.json</title><rect x="250" y="40" width="140" height="110" rx="12"/><text class="nm" x="320" y="66">dataset</text></g>
+          <g class="file"><rect x="258" y="96" width="124" height="26" rx="5"/><text x="320" y="114">owners.json</text></g>
+          <g class="node" id="sm4a-desk"><title>desk</title><rect x="450" y="40" width="170" height="110" rx="12"/><text class="nm" x="535" y="66">desk</text></g>
+          <path class="e good" d="M190,80 L248,80"/><text class="el good mid" x="219" y="72">push</text>
+          <path class="e" d="M450,110 L392,110"/><text class="el mid" x="421" y="128" style="font-size:11px">pull</text>
+          <g class="box"><rect x="20" y="180" width="600" height="40" rx="8"/></g>
+          <text class="mono" x="32" y="205" style="font-size:12.5px;fill:var(--text-primary)">{"events-ampcode.parquet": "laptop"}</text>
+          <text class="el good" x="20" y="252">desk ingest --amp → refused: owned by laptop (--take-over)</text>
+          <text class="el good" x="20" y="272">parser fix → version bump from #1, nothing to delete</text>
+          <text class="el mut" x="20" y="316">claimed · released · taken over — written once, read by every machine</text>
+        </svg>
+      </div>
+    </div>
+    <div class="ev"><div class="cap">Already pinned by <code>tests/test_sync.py::test_amp_files_are_own_on_the_machine_that_ingests_amp</code></div>
+<span class="mono">local events-ampcode.parquet exists, no amp-threads.json  →  <b>in to_pull</b> (overwritten on next sync)</span></div>
+    <div class="gains">
+      <span class="gain"><b>No silent overwrite</b> of the newest Amp data</span>
+      <span class="gain"><b>One writer</b> guaranteed per shared file</span>
+      <span class="cost"><b>Smaller fix</b>: #1’s parser version alone removes the documented trigger</span>
+    </div>
+  </section>
+
+  <div class="skip">
+    <h2>Looked at, left alone</h2>
+    <div class="chips">
+      <span class="c"><b>Dashboard filters</b> · already one <code>state</code> object, render() is pure</span>
+      <span class="c"><b>Codex token deltas</b> · one baseline variable</span>
+      <span class="c"><b>Claude cost source</b> · a fallback ladder, not a lifecycle</span>
+      <span class="c"><b>Amp rate limit</b> · already an explicit Event</span>
+    </div>
+  </div>
+
+  <form class="decide" data-lavish-question="state-machines" id="decide" onsubmit="event.preventDefault(); const f = new FormData(event.currentTarget); const names = {sm1: 'Amp thread sync', sm2: 'Session merge', sm3: 'Tool-call lifecycle', sm4: 'Sync ownership'}; const items = Object.keys(names).filter((k) => f.get(k)).map((k) => ({ id: k.toUpperCase(), label: names[k], disposition: f.get(k) })); const note = (f.get('note') || '').trim(); const st = event.currentTarget.querySelector('.status'); if (!items.length && !note) { st.textContent = 'Pick at least one.'; return; } window.lavish?.queuePrompt?.('Decisions on the implicit state machines. Act on every item and give an item-by-item receipt.' + (note ? ' Note: ' + note : ''), { tag: 'tracked-batch', text: items.map((i) => i.id + ': ' + i.disposition).join(' · ') + (note ? ' · note' : ''), element: event.currentTarget, data: { items, note } }); st.textContent = window.lavish ? 'Queued. Press Send to Agent.' : 'Open in Lavish to send.';">
+    <h2>What should I do with each?</h2>
+    <p class="sub" style="margin-bottom:8px">Or click anything above to annotate it.</p>
+    <div class="r"><div><b>1</b> Amp thread sync</div><div class="opts">
+      <label class="o"><input type="radio" name="sm1" value="make explicit"> make explicit</label>
+      <label class="o"><input type="radio" name="sm1" value="fix bugs only"> fix bugs only</label>
+      <label class="o"><input type="radio" name="sm1" value="skip"> skip</label></div></div>
+    <div class="r"><div><b>2</b> Session merge</div><div class="opts">
+      <label class="o"><input type="radio" name="sm2" value="make explicit (event_id)"> event_id merge</label>
+      <label class="o"><input type="radio" name="sm2" value="verify Claude pruning first"> verify pruning first</label>
+      <label class="o"><input type="radio" name="sm2" value="skip"> skip</label></div></div>
+    <div class="r"><div><b>3</b> Tool-call lifecycle</div><div class="opts">
+      <label class="o"><input type="radio" name="sm3" value="make explicit"> one tracker + no_result</label>
+      <label class="o"><input type="radio" name="sm3" value="no_result only"> no_result only</label>
+      <label class="o"><input type="radio" name="sm3" value="skip"> skip</label></div></div>
+    <div class="r"><div><b>4</b> Sync ownership</div><div class="opts">
+      <label class="o"><input type="radio" name="sm4" value="make explicit (owners.json)"> owners.json</label>
+      <label class="o"><input type="radio" name="sm4" value="rely on #1 parser version"> rely on #1</label>
+      <label class="o"><input type="radio" name="sm4" value="skip"> skip</label></div></div>
+    <textarea name="note" rows="2" placeholder="Anything else (optional)"></textarea>
+    <div class="go"><button type="submit">Queue decisions</button><span class="status" role="status" aria-live="polite"></span></div>
+  </form>
+</main>
+</body>
+</html>
